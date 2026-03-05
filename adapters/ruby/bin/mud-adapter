@@ -1,0 +1,250 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Set up Bundler so vendored gems are loadable when spawned directly
+# (without `bundle exec`).
+ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)
+require "bundler/setup"
+
+require_relative "../lib/mud_adapter"
+require_relative "../lib/mud_adapter/area_logger"
+require_relative "../lib/mud_adapter/container"
+
+module MudAdapter
+  # Main entry point for the MUD adapter process.
+  #
+  # The Rust driver spawns this as a child process, passing the MOP socket
+  # path via --socket. The adapter connects, sends a handshake, starts the
+  # portal web server, and enters the main message loop.
+  class Main
+    def initialize(socket_path, web_socket_path: nil)
+      @socket_path = socket_path
+      @web_socket_path = web_socket_path || derive_web_socket_path(socket_path)
+      @client = Client.new(socket_path)
+      @area_loader = AreaLoader.new(@client)
+      @session_handler = SessionHandler.new(@client, @area_loader)
+      @web_server = nil
+      @running = true
+    end
+
+    def run
+      log("Connecting to MOP socket: #{@socket_path}")
+      @client.connect!
+      log("Connected. Handshake sent.")
+
+      # Process early messages (e.g. Configure with stdlib DB URL) before
+      # starting the web server, so that migrations complete before any
+      # HTTP request can hit the portal.
+      process_early_messages
+
+      start_web_server
+
+      # Send area template in a background thread — it needs the message
+      # loop to dispatch the response, so it can't run synchronously here.
+      Thread.new { send_area_template }
+
+      trap("INT") { @running = false }
+      trap("TERM") { @running = false }
+
+      message_loop
+    rescue Client::ConnectionClosed
+      log("Connection closed by driver.")
+    rescue StandardError => e
+      log("Fatal error: #{e.class}: #{e.message}")
+      log(e.backtrace&.first(5)&.join("\n") || "  (no backtrace)")
+      exit(1)
+    ensure
+      @web_server&.stop
+      @client.close
+      log("Adapter shut down.")
+    end
+
+    private
+
+    # Read and process messages until we've handled the configure message
+    # (or the socket has no more pending data). This ensures migrations
+    # run before the web server accepts requests.
+    def process_early_messages
+      # Use IO.select with a timeout to read any messages already queued.
+      # The driver sends Configure right after accepting the adapter, so
+      # it should arrive quickly.
+      deadline = Time.now + 10
+      while Time.now < deadline
+        ready = IO.select([@client.instance_variable_get(:@socket)], nil, nil, 1)
+        break unless ready
+
+        msg = @client.read_message
+        dispatch(msg)
+
+        # Once we've processed a configure message, we're done.
+        break if msg["type"] == "configure"
+      end
+    end
+
+    def start_web_server
+      @web_server = WebServer.new(client: @client, socket_path: @web_socket_path, session_handler: @session_handler, area_loader: @area_loader)
+      @web_server.start
+      log("Portal web server started on unix://#{@web_server.socket_path}")
+    rescue StandardError => e
+      log("Warning: Failed to start web server: #{e.class}: #{e.message}")
+      log(e.backtrace&.first(3)&.join("\n") || "  (no backtrace)")
+    end
+
+    def message_loop
+      while @running
+        msg = @client.read_message
+        dispatch(msg)
+      end
+    end
+
+    def dispatch(msg)
+      type = msg["type"]
+
+      case type
+      when "request_response", "request_error"
+        # Dispatch driver responses to the web server thread that is
+        # blocking on Client#send_driver_request.
+        unless @client.dispatch_response(msg)
+          log("Received response for unknown request_id: #{msg["request_id"]}")
+        end
+
+      when "load_area"
+        @area_loader.load_area(msg["area_id"], msg["path"], db_url: msg["db_url"])
+
+      when "reload_area"
+        @area_loader.reload_area(msg["area_id"], msg["path"], db_url: msg["db_url"])
+
+      when "unload_area"
+        @area_loader.unload_area(msg["area_id"])
+
+      when "session_start"
+        @session_handler.start_session(msg["session_id"], msg["username"])
+
+      when "session_input"
+        @session_handler.handle_input(msg["session_id"], msg["line"])
+
+      when "session_end"
+        @session_handler.end_session(msg["session_id"])
+
+      when "ping"
+        handle_ping(msg["seq"])
+
+      when "configure"
+        handle_configure(msg)
+
+      when "call"
+        handle_call(msg)
+
+      else
+        log("Unknown message type: #{type.inspect}")
+      end
+    rescue StandardError => e
+      log("Error handling #{msg["type"]}: #{e.class}: #{e.message}")
+    end
+
+    # Derive the web socket path from the MOP socket path.
+    # e.g. /tmp/mud-adapter.sock -> /tmp/mud-portal.sock
+    def derive_web_socket_path(mop_socket_path)
+      dir = File.dirname(mop_socket_path)
+      File.join(dir, "mud-portal.sock")
+    end
+
+    def handle_ping(seq)
+      @client.send_message("type" => "pong", "seq" => seq)
+    end
+
+    def handle_configure(msg)
+      stdlib_db_url = msg["stdlib_db_url"]
+      if stdlib_db_url
+        log("Received stdlib DB URL, running migrations...")
+        MudAdapter::Stdlib::StdlibMigrator.run!(stdlib_db_url)
+        log("Stdlib migrations complete.")
+      end
+    end
+
+    # Send the area template files to the driver so it can seed new
+    # repositories with them. The template lives in the stdlib and can
+    # be updated without recompiling the driver.
+    #
+    # NOTE: This must NOT be called from handle_configure (which runs on
+    # the main message loop thread during process_early_messages).
+    # send_driver_request blocks waiting for a response that can only be
+    # read by the same thread — causing a deadlock. Instead, this is
+    # called from run() after process_early_messages returns, when the
+    # message loop is running in the background.
+    def send_area_template
+      template_dir = File.expand_path("../lib/mud_adapter/stdlib/templates/area", __dir__)
+      unless File.directory?(template_dir)
+        log("Warning: area template directory not found: #{template_dir}")
+        return
+      end
+
+      files = {}
+      Dir.glob("#{template_dir}/**/*", File::FNM_DOTMATCH).each do |path|
+        next unless File.file?(path)
+        # Skip dev tooling (bin/, dev/) — these are for standalone development
+        rel = path.sub("#{template_dir}/", "")
+        next if rel.start_with?("bin/") || rel.start_with?("dev/")
+        files[rel] = File.read(path)
+      end
+
+      log("Sending area template (#{files.size} files) to driver...")
+      @client.send_driver_request("set_area_template", { "files" => files })
+      log("Area template sent.")
+    rescue StandardError => e
+      log("Warning: failed to send area template: #{e.message}")
+    end
+
+    def handle_call(msg)
+      # Call support is not yet implemented; return an error to the driver.
+      @client.send_message(
+        "type" => "call_error",
+        "request_id" => msg["request_id"],
+        "error" => "Call dispatch not yet implemented"
+      )
+    end
+
+    def log(message)
+      $stderr.puts("[mud-adapter] #{message}")
+    end
+  end
+end
+
+# --- CLI ---
+
+def parse_args(argv)
+  socket_path = nil
+  web_socket_path = nil
+
+  i = 0
+  while i < argv.length
+    case argv[i]
+    when "--socket"
+      i += 1
+      socket_path = argv[i]
+    when "--web-socket"
+      i += 1
+      web_socket_path = argv[i]
+    when "--help", "-h"
+      $stderr.puts("Usage: mud-adapter --socket PATH [--web-socket PATH]")
+      $stderr.puts("  --socket PATH       Path to the MOP Unix domain socket")
+      $stderr.puts("  --web-socket PATH   Portal web server Unix socket path (default: derived from --socket)")
+      exit(0)
+    else
+      $stderr.puts("Unknown argument: #{argv[i]}")
+      exit(1)
+    end
+    i += 1
+  end
+
+  unless socket_path
+    $stderr.puts("Error: --socket PATH is required")
+    $stderr.puts("Usage: mud-adapter --socket PATH [--web-socket PATH]")
+    exit(1)
+  end
+
+  { socket_path: socket_path, web_socket_path: web_socket_path }
+end
+
+opts = parse_args(ARGV)
+MudAdapter::Main.new(opts[:socket_path], web_socket_path: opts[:web_socket_path]).run

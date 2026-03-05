@@ -1,0 +1,63 @@
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>Merge Requests &mdash; <%= namespace %>/<%= area_name %></h3>
+    <a href="/account/characters" class="btn btn-sm btn-outline-light">Back</a>
+  </div>
+
+  <div class="card bg-secondary text-light mb-4">
+    <div class="card-header">New Merge Request</div>
+    <div class="card-body">
+      <form method="post" action="/review/<%= namespace %>/<%= area_name %>/new">
+        <div class="mb-3">
+          <label for="title" class="form-label">Title</label>
+          <input type="text" class="form-control bg-dark text-light" id="title" name="title" required>
+        </div>
+        <div class="mb-3">
+          <label for="description" class="form-label">Description (optional)</label>
+          <textarea class="form-control bg-dark text-light" id="description" name="description" rows="3"></textarea>
+        </div>
+        <button type="submit" class="btn btn-info">Create Merge Request</button>
+      </form>
+    </div>
+  </div>
+
+  <% if merge_requests.empty? %>
+    <p class="text-muted">No merge requests yet.</p>
+  <% else %>
+    <table class="table table-dark table-striped">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Author</th>
+          <th>State</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% merge_requests.each do |mr| %>
+          <tr>
+            <td><a href="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>" class="text-info">#<%= mr[:id] %></a></td>
+            <td><a href="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>" class="text-light text-decoration-none"><%= mr[:title] %></a></td>
+            <td><%= mr[:author] %></td>
+            <td>
+              <% case mr[:state] %>
+              <% when 'open' %>
+                <span class="badge bg-primary">open</span>
+              <% when 'approved' %>
+                <span class="badge bg-success">approved</span>
+              <% when 'merged' %>
+                <span class="badge bg-info">merged</span>
+              <% when 'rejected' %>
+                <span class="badge bg-danger">rejected</span>
+              <% when 'closed' %>
+                <span class="badge bg-secondary">closed</span>
+              <% end %>
+            </td>
+            <td><%= mr[:created_at] %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</div>

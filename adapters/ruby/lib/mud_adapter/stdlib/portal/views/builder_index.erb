@@ -1,0 +1,13 @@
+<h2>Builder — Area Web Content</h2>
+
+<% if areas.empty? %>
+  <p>No areas with web content found.</p>
+<% else %>
+  <ul>
+    <% areas.each do |area| %>
+      <li>
+        <a href="/builder/<%= area[:namespace] %>/<%= area[:name] %>/"><%= area[:key] %></a>
+      </li>
+    <% end %>
+  </ul>
+<% end %>

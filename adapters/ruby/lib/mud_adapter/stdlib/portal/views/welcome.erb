@@ -1,0 +1,12 @@
+<div class="container mt-5" style="max-width: 500px;">
+  <h1 class="mb-4"><%= server_name %></h1>
+  <% if account %>
+    <p>Logged in as <strong><%= account %></strong></p>
+    <a href="/account/characters" class="btn btn-success me-2">Characters</a>
+    <a href="/play" class="btn btn-primary me-2">Play</a>
+  <% else %>
+    <p>Welcome! Log in or create an account to get started.</p>
+    <a href="/account/login" class="btn btn-primary me-2">Log In</a>
+    <a href="/account/register" class="btn btn-outline-light">Create Account</a>
+  <% end %>
+</div>

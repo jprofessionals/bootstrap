@@ -1,0 +1,50 @@
+[package]
+name = "mud-driver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mud-core = { path = "../mud-core" }
+mud-mop = { path = "../mud-mop" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+glob = "0.3"
+sqlx = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
+bcrypt = { workspace = true }
+hex = { workspace = true }
+russh = "0.57"
+async-trait = { workspace = true }
+git2 = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tera = { workspace = true }
+mime_guess = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+futures = { workspace = true }
+bytes = { workspace = true }
+urlencoding = "2.1.3"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+reqwest = { workspace = true, features = ["cookies"] }

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Git - <%= server_name %></title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #1e1e1e; color: #d4d4d4; }
+    .diff-add { color: #4ec9b0; background: #1e3a2c; }
+    .diff-del { color: #f48771; background: #3a1e1e; }
+    pre { background: #252526; padding: 12px; border-radius: 4px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="container-fluid mt-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h3>Git Repositories</h3>
+      <div>
+        <a href="/editor" class="btn btn-sm btn-warning me-2">Editor</a>
+        <a href="/account/characters" class="btn btn-sm btn-outline-light">Characters</a>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-3">
+        <div class="list-group" id="repo-list">
+          <% repos.each do |repo| %>
+            <a href="#" class="list-group-item list-group-item-action bg-dark text-light repo-link"
+               data-repo="<%= repo %>" onclick="selectRepo('<%= repo %>')"><%= repo %></a>
+          <% end %>
+        </div>
+      </div>
+      <div class="col-md-9">
+        <div id="repo-detail">
+          <p class="text-muted">Select a repository</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    let currentRepo = null;
+
+    function selectRepo(repo) {
+      currentRepo = repo;
+      document.querySelectorAll('.repo-link').forEach(el => el.classList.remove('active'));
+      document.querySelector('[data-repo="' + repo + '"]').classList.add('active');
+      loadRepoDetail(repo);
+    }
+
+    function loadRepoDetail(repo) {
+      const parts = repo.split('/');
+      const ns = parts[0], name = parts[1];
+      Promise.all([
+        fetch('/git/api/repos/' + ns + '/' + name + '/log').then(r => r.json()),
+        fetch('/git/api/repos/' + ns + '/' + name + '/status').then(r => r.json()),
+        fetch('/git/api/repos/' + ns + '/' + name + '/branches').then(r => r.json()),
+        fetch('/git/api/repos/' + ns + '/' + name + '/merge-requests').then(r => r.json()).catch(() => ({ merge_requests: [] }))
+      ]).then(([log, status, branches, mrs]) => {
+        renderRepoDetail(repo, log, status, branches, mrs);
+      });
+    }
+
+    function renderRepoDetail(repo, log, status, branches, mrs) {
+      const detail = document.getElementById('repo-detail');
+      let html = '<h4>' + repo + '</h4>';
+
+      // Branches section with switch buttons and MR badges
+      html += '<h5>Branches</h5><div class="mb-3">';
+      branches.branches.forEach(b => {
+        if (b.current) {
+          html += '<span class="badge bg-success me-1">' + b.name + ' (current)</span>';
+        } else {
+          html += '<span class="badge bg-secondary me-1" style="cursor:pointer;" onclick="switchBranch(\'' + b.name + '\')">' + b.name + ' &#8635;</span>';
+        }
+        if (b.merge_requests && b.merge_requests.length > 0) {
+          b.merge_requests.forEach(mr => {
+            html += '<span class="badge bg-warning ms-1">MR #' + mr.id + ' \u2014 ' + mr.state + '</span>';
+          });
+        }
+      });
+      html += '<br><div class="input-group mt-2" style="max-width:300px;">';
+      html += '<input id="new-branch" class="form-control form-control-sm bg-dark text-light" placeholder="New branch...">';
+      html += '<button class="btn btn-sm btn-outline-info" onclick="createBranch()">Create</button></div></div>';
+
+      // Working directory section
+      html += '<h5>Working Directory</h5>';
+      if (status.changes.length === 0) {
+        html += '<p class="text-muted">Clean</p>';
+      } else {
+        html += '<ul class="list-unstyled">';
+        status.changes.forEach(c => {
+          html += '<li><code>' + c.path + '</code> <span class="badge bg-warning">' + JSON.stringify(c.status) + '</span></li>';
+        });
+        html += '</ul>';
+        html += '<div class="input-group mt-2" style="max-width:500px;">';
+        html += '<input id="commit-msg" class="form-control form-control-sm bg-dark text-light" placeholder="Commit message...">';
+        html += '<button class="btn btn-sm btn-success" onclick="commitAll()">Commit All</button></div>';
+      }
+
+      // Recent commits
+      html += '<h5 class="mt-3">Recent Commits</h5>';
+      html += '<table class="table table-dark table-sm"><thead><tr><th>SHA</th><th>Message</th><th>Author</th><th>Time</th></tr></thead><tbody>';
+      log.commits.forEach(c => {
+        html += '<tr><td><code>' + c.oid + '</code></td><td>' + c.message + '</td><td>' + c.author + '</td><td>' + c.time + '</td></tr>';
+      });
+      html += '</tbody></table>';
+
+      // Merge requests section
+      html += '<h5 class="mt-3">Merge Requests</h5>';
+      if (mrs.merge_requests.length === 0) {
+        html += '<p class="text-muted">No merge requests</p>';
+      } else {
+        html += '<table class="table table-dark table-sm"><thead><tr><th>#</th><th>Title</th><th>Target</th><th>Author</th><th>State</th><th>Actions</th></tr></thead><tbody>';
+        mrs.merge_requests.forEach(mr => {
+          html += '<tr>';
+          html += '<td>' + mr.id + '</td>';
+          html += '<td>' + mr.title + '</td>';
+          html += '<td><code>' + (mr.source_branch || 'develop') + ' &rarr; ' + (mr.target_branch || 'main') + '</code></td>';
+          html += '<td>' + mr.author + '</td>';
+          html += '<td><span class="badge bg-' + mrStateBadge(mr.state) + '">' + mr.state + '</span></td>';
+          html += '<td>';
+          html += '<button class="btn btn-sm btn-outline-light me-1" onclick="showMRDiff(' + mr.id + ')">Diff</button>';
+          if (mr.state === 'open') {
+            html += '<button class="btn btn-sm btn-outline-success me-1" onclick="approveMR(' + mr.id + ')">Approve</button>';
+            html += '<button class="btn btn-sm btn-outline-danger me-1" onclick="rejectMR(' + mr.id + ')">Reject</button>';
+          }
+          if (mr.state === 'open' || mr.state === 'approved') {
+            html += '<button class="btn btn-sm btn-outline-primary" onclick="mergeMR(' + mr.id + ')">Merge</button>';
+          }
+          html += '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+
+      // MR diff viewer
+      html += '<div id="mr-diff-view" style="display:none;" class="mt-3"></div>';
+
+      // New MR form with target branch autocomplete
+      html += '<datalist id="branch-options">';
+      branches.branches.forEach(b => {
+        html += '<option value="' + b.name + '">';
+      });
+      html += '</datalist>';
+      html += '<div class="mt-2" style="max-width:500px;">';
+      html += '<div class="input-group mb-1">';
+      html += '<span class="input-group-text bg-dark text-light" style="font-size:12px;">Title</span>';
+      html += '<input id="mr-title" class="form-control form-control-sm bg-dark text-light" placeholder="MR title...">';
+      html += '</div>';
+      html += '<div class="input-group mb-1">';
+      html += '<span class="input-group-text bg-dark text-light" style="font-size:12px;">Target</span>';
+      html += '<input id="mr-target" class="form-control form-control-sm bg-dark text-light" list="branch-options" placeholder="main" value="main">';
+      html += '</div>';
+      html += '<button class="btn btn-sm btn-outline-warning" onclick="createMR()">New Merge Request</button>';
+      html += '</div>';
+
+      detail.innerHTML = html;
+    }
+
+    function mrStateBadge(state) {
+      const map = { open: 'info', approved: 'success', merged: 'primary', rejected: 'danger', closed: 'secondary' };
+      return map[state] || 'secondary';
+    }
+
+    function switchBranch(branchName) {
+      if (!currentRepo) return;
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch: branchName })
+      }).then(r => {
+        if (r.ok) loadRepoDetail(currentRepo);
+      });
+    }
+
+    function createBranch() {
+      const name = document.getElementById('new-branch').value;
+      if (!name || !currentRepo) return;
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/branches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      }).then(() => loadRepoDetail(currentRepo));
+    }
+
+    function commitAll() {
+      const msg = document.getElementById('commit-msg').value;
+      if (!msg || !currentRepo) return;
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+      }).then(() => loadRepoDetail(currentRepo));
+    }
+
+    function createMR() {
+      const title = document.getElementById('mr-title').value;
+      const targetInput = document.getElementById('mr-target');
+      const target = targetInput ? targetInput.value.trim() : 'main';
+      if (!title || !currentRepo) return;
+      // Validate target branch exists in datalist
+      const options = document.querySelectorAll('#branch-options option');
+      const validBranches = Array.from(options).map(o => o.value);
+      if (target && !validBranches.includes(target)) {
+        alert('Branch "' + target + '" does not exist');
+        return;
+      }
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/merge-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title, target_branch: target || 'main' })
+      }).then(() => loadRepoDetail(currentRepo));
+    }
+
+    function approveMR(id) {
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/merge-requests/' + id + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      }).then(() => loadRepoDetail(currentRepo));
+    }
+
+    function rejectMR(id) {
+      const reason = prompt('Rejection reason (optional):');
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/merge-requests/' + id + '/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || '' })
+      }).then(() => loadRepoDetail(currentRepo));
+    }
+
+    function mergeMR(id) {
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/merge-requests/' + id + '/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      }).then(r => r.json()).then(data => {
+        if (data.status === 'error') alert('Merge failed: ' + data.message);
+        loadRepoDetail(currentRepo);
+      });
+    }
+
+    function showMRDiff(id) {
+      const diffView = document.getElementById('mr-diff-view');
+      if (diffView.dataset.mrId === String(id) && diffView.style.display !== 'none') {
+        diffView.style.display = 'none';
+        return;
+      }
+      diffView.dataset.mrId = String(id);
+      diffView.style.display = 'block';
+      diffView.innerHTML = '<span class="text-muted">Loading diff...</span>';
+      const parts = currentRepo.split('/');
+      fetch('/git/api/repos/' + parts[0] + '/' + parts[1] + '/merge-requests/' + id + '/diff')
+        .then(r => r.json())
+        .then(data => {
+          if (!data.diff || data.diff.length === 0) {
+            diffView.innerHTML = '<p class="text-muted">No changes</p>';
+            return;
+          }
+          let html = '<div class="d-flex justify-content-between align-items-center mb-2">';
+          html += '<h5 class="mb-0">MR #' + id + ' Diff</h5>';
+          html += '<button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById(\'mr-diff-view\').style.display=\'none\'">Close</button>';
+          html += '</div>';
+          data.diff.forEach(file => {
+            html += '<div class="mb-3"><strong>' + escapeHtml(file.file) + '</strong><pre style="font-size:12px;">';
+            file.hunks.forEach(hunk => {
+              html += '<span class="text-muted">' + escapeHtml(hunk.header) + '</span>\n';
+              hunk.lines.forEach(line => {
+                const escaped = escapeHtml(line.content);
+                if (line.origin === '+') {
+                  html += '<span class="diff-add">+' + escaped + '</span>\n';
+                } else if (line.origin === '-') {
+                  html += '<span class="diff-del">-' + escaped + '</span>\n';
+                } else {
+                  html += ' ' + escaped + '\n';
+                }
+              });
+            });
+            html += '</pre></div>';
+          });
+          diffView.innerHTML = html;
+        })
+        .catch(() => {
+          diffView.innerHTML = '<p class="text-danger">Failed to load diff</p>';
+        });
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Auto-select first repo on page load
+    const firstRepo = document.querySelector('.repo-link');
+    if (firstRepo) selectRepo(firstRepo.dataset.repo);
+  </script>
+</body>
+</html>

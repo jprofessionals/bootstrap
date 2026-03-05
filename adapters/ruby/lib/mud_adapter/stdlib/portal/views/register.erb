@@ -1,0 +1,24 @@
+<div class="container mt-5" style="max-width: 400px;">
+  <h1 class="mb-4">Create Account</h1>
+  <% if error %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% end %>
+  <form method="post" action="/account/register">
+    <div class="mb-3">
+      <label class="form-label">Username</label>
+      <input name="username" class="form-control" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Password</label>
+      <input type="password" name="password" class="form-control" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Character Name</label>
+      <input name="character" class="form-control" required>
+    </div>
+    <button type="submit" class="btn btn-primary w-100">Create Account</button>
+  </form>
+  <p class="mt-3 text-center">
+    Already have an account? <a href="/account/login" class="text-info">Log in</a>
+  </p>
+</div>

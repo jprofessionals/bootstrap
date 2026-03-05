@@ -1,0 +1,98 @@
+<style>
+  .diff-add { color: #4ec9b0; background: #1e3a2c; }
+  .diff-del { color: #f48771; background: #3a1e1e; }
+  pre.diff-block { background: #252526; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85em; }
+</style>
+
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>#<%= mr[:id] %>: <%= mr[:title] %></h3>
+    <a href="/review/<%= namespace %>/<%= area_name %>/" class="btn btn-sm btn-outline-light">Back to list</a>
+  </div>
+
+  <div class="mb-3">
+    <% case mr[:state] %>
+    <% when 'open' %>
+      <span class="badge bg-primary fs-6">open</span>
+    <% when 'approved' %>
+      <span class="badge bg-success fs-6">approved</span>
+    <% when 'merged' %>
+      <span class="badge bg-info fs-6">merged</span>
+    <% when 'rejected' %>
+      <span class="badge bg-danger fs-6">rejected</span>
+    <% when 'closed' %>
+      <span class="badge bg-secondary fs-6">closed</span>
+    <% end %>
+    <span class="ms-3 text-muted">by <strong><%= mr[:author] %></strong></span>
+    <span class="ms-3 text-muted">Created: <%= mr[:created_at] %></span>
+    <% if mr[:updated_at] %>
+      <span class="ms-3 text-muted">Updated: <%= mr[:updated_at] %></span>
+    <% end %>
+  </div>
+
+  <% if mr[:description] && !mr[:description].empty? %>
+    <div class="card bg-secondary text-light mb-4">
+      <div class="card-header">Description</div>
+      <div class="card-body"><%= mr[:description] %></div>
+    </div>
+  <% end %>
+
+  <div class="card bg-secondary text-light mb-4">
+    <div class="card-header">Approvals (<%= mr[:approvals_count] || 0 %>)</div>
+    <div class="card-body">
+      <% if mr[:approvals] && !mr[:approvals].empty? %>
+        <ul class="list-unstyled mb-0">
+          <% mr[:approvals].each do |approval| %>
+            <li class="mb-1">
+              <span class="badge bg-success">approved</span>
+              <strong><%= approval[:approver] %></strong>
+              <% if approval[:comment] && !approval[:comment].empty? %>
+                &mdash; <%= approval[:comment] %>
+              <% end %>
+              <span class="text-muted ms-2"><%= approval[:created_at] %></span>
+            </li>
+          <% end %>
+        </ul>
+      <% else %>
+        <p class="text-muted mb-0">No approvals yet.</p>
+      <% end %>
+    </div>
+  </div>
+
+  <div class="card bg-secondary text-light mb-4">
+    <div class="card-header">Diff (develop &rarr; main)</div>
+    <div class="card-body">
+      <% if diff && !diff.empty? %>
+        <pre class="diff-block text-light mb-0"><% diff.each_line do |line| %><% if line.start_with?('+') && !line.start_with?('+++') %><span class="diff-add"><%= line %></span><% elsif line.start_with?('-') && !line.start_with?('---') %><span class="diff-del"><%= line %></span><% else %><%= line %><% end %><% end %></pre>
+      <% else %>
+        <p class="text-muted mb-0">No differences between main and develop.</p>
+      <% end %>
+    </div>
+  </div>
+
+  <% if %w[open approved].include?(mr[:state]) %>
+    <div class="d-flex gap-2 mb-4">
+      <form method="post" action="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>/approve" class="d-inline">
+        <div class="input-group">
+          <input type="text" name="comment" class="form-control bg-dark text-light" placeholder="Approval comment (optional)">
+          <button type="submit" class="btn btn-success">Approve</button>
+        </div>
+      </form>
+
+      <form method="post" action="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>/reject" class="d-inline">
+        <div class="input-group">
+          <input type="text" name="reason" class="form-control bg-dark text-light" placeholder="Reason (optional)">
+          <button type="submit" class="btn btn-danger">Reject</button>
+        </div>
+      </form>
+
+      <form method="post" action="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>/merge" class="d-inline">
+        <button type="submit" class="btn btn-info">Merge</button>
+      </form>
+
+      <form method="post" action="/review/<%= namespace %>/<%= area_name %>/<%= mr[:id] %>/close" class="d-inline">
+        <button type="submit" class="btn btn-outline-secondary">Close</button>
+      </form>
+    </div>
+  <% end %>
+</div>

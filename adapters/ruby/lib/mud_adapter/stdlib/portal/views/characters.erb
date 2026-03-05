@@ -1,0 +1,38 @@
+<div class="container mt-5" style="max-width: 600px;">
+  <h1 class="mb-4">Characters</h1>
+  <div class="list-group">
+    <% characters.each do |char| %>
+      <div class="list-group-item bg-secondary text-light d-flex justify-content-between align-items-center">
+        <div>
+          <a href="/account/characters/<%= char['name'] %>" class="text-light text-decoration-none">
+            <strong><%= char['name'] %></strong>
+          </a>
+          <% if char['name'] == active %>
+            <span class="badge bg-success ms-1">active</span>
+          <% end %>
+        </div>
+        <div>
+          <% unless char['name'] == active %>
+            <form method="post" action="/account/characters/switch" class="d-inline">
+              <input type="hidden" name="character" value="<%= char['name'] %>">
+              <button type="submit" class="btn btn-sm btn-outline-light">Switch</button>
+            </form>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+  <div class="mt-3">
+    <a href="/account/characters/new" class="btn btn-outline-info">New Character</a>
+  </div>
+  <div class="mt-4">
+    <a href="/play" class="btn btn-success me-2">Play</a>
+    <% if role != 'player' %>
+      <a href="/editor" class="btn btn-warning me-2">Editor</a>
+      <a href="/git" class="btn btn-info">Git</a>
+    <% end %>
+    <form method="post" action="/account/logout" class="d-inline">
+      <button type="submit" class="btn btn-outline-danger">Logout</button>
+    </form>
+  </div>
+</div>

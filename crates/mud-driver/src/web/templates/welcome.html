@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}Welcome - MUD Driver{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-8 text-center">
+        <h1>Welcome to MUD Driver</h1>
+        <p class="lead">A modern MUD engine written in Rust.</p>
+        <div class="mt-4">
+            <a href="/account/login" class="btn btn-primary btn-lg me-2">Login</a>
+            <a href="/account/register" class="btn btn-outline-secondary btn-lg">Register</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

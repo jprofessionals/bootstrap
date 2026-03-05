@@ -1,0 +1,30 @@
+<div class="container mt-5" style="max-width: 500px;">
+  <h1 class="mb-4"><%= character['name'] %></h1>
+  <table class="table table-dark">
+    <tbody>
+      <tr>
+        <th>Created</th>
+        <td><%= character['created_at'] || 'Unknown' %></td>
+      </tr>
+      <tr>
+        <th>Status</th>
+        <td>
+          <% if character['name'] == active %>
+            <span class="badge bg-success">Active</span>
+          <% else %>
+            <form method="post" action="/account/characters/switch" class="d-inline">
+              <input type="hidden" name="character" value="<%= character['name'] %>">
+              <button type="submit" class="btn btn-sm btn-outline-light">Switch to this character</button>
+            </form>
+          <% end %>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <% if error %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% end %>
+  <div class="d-flex gap-2">
+    <a href="/account/characters" class="btn btn-outline-light">Back to Characters</a>
+  </div>
+</div>

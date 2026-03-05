@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+DEV_TOOLKIT_VERSION = 1
+
+require 'optparse'
+
+options = { api_port: 4000, enable_db: false, reset_db: false }
+
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/mud-web-dev [options]'
+
+  opts.on('--api-port PORT', Integer, 'API server port (default: 4000)') do |p|
+    options[:api_port] = p
+  end
+
+  opts.on('--db', 'Enable PostgreSQL via Testcontainers (requires Docker)') do
+    options[:enable_db] = true
+  end
+
+  opts.on('--reset-db', 'Remove persistent volume and start fresh') do
+    options[:enable_db] = true
+    options[:reset_db] = true
+  end
+
+  opts.on('--no-db', 'Disable database (default)') do
+    options[:enable_db] = false
+  end
+end.parse!
+
+# Resolve area root (parent of bin/)
+area_path = File.expand_path('..', __dir__)
+
+# Use dev/Gemfile for dependencies
+ENV['BUNDLE_GEMFILE'] = File.join(area_path, 'dev', 'Gemfile')
+require 'bundler/setup'
+
+$LOAD_PATH.unshift(File.join(area_path, 'dev', 'lib'))
+require 'mud_dev/dev_server'
+
+dev = MudDev::DevServer.new(
+  area_path: area_path,
+  enable_db: options[:enable_db],
+  reset_db: options[:reset_db]
+)
+dev.start(api_port: options[:api_port])

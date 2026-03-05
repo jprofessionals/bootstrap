@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Editor - <%= server_name %></title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #1e1e1e; color: #d4d4d4; overflow: hidden; }
+    #editor-layout { display: grid; grid-template-columns: 250px 1fr 300px 320px; grid-template-rows: auto 1fr auto; height: 100vh; }
+    #editor-layout.panel-hidden { grid-template-columns: 250px 1fr 320px; }
+    #editor-layout.panel-left { grid-template-columns: 250px 1fr 320px; }
+    #editor-layout.ai-hidden { grid-template-columns: 250px 1fr 300px; }
+    #editor-layout.panel-hidden.ai-hidden { grid-template-columns: 250px 1fr; }
+    #editor-layout.panel-left.ai-hidden { grid-template-columns: 250px 1fr; }
+    #nav { grid-column: 1 / -1; background: #333; padding: 8px 16px; display: flex; align-items: center; gap: 12px; }
+    #left-sidebar { display: flex; flex-direction: column; overflow: hidden; background: #252526; border-right: 1px solid #444; }
+    #file-tree { overflow-y: auto; padding: 8px; flex: 1 1 auto; min-height: 0; }
+    #monaco-container { min-height: 0; min-width: 0; overflow: hidden; }
+    #status-bar { grid-column: 1 / -1; background: #007acc; color: white; padding: 4px 16px; font-size: 12px; }
+    .file-item { cursor: pointer; padding: 2px 4px; font-size: 13px; font-family: monospace; white-space: nowrap; }
+    .file-item:hover { background: #37373d; }
+    .dir-item { cursor: pointer; padding: 2px 4px; font-size: 13px; font-family: monospace; color: #c8c8c8; white-space: nowrap; user-select: none; }
+    .dir-item:hover { background: #37373d; }
+    .dir-item .arrow { display: inline-block; width: 12px; transition: transform 0.1s; }
+    .dir-item.collapsed .arrow { transform: rotate(-90deg); }
+    .dir-children { overflow: hidden; }
+    .dir-children.hidden { display: none; }
+    #git-panel { overflow-y: auto; background: #252526; padding: 12px; border-left: 1px solid #444; font-size: 13px; }
+    #git-panel.hidden { display: none; }
+    #git-panel.docked-left { border-left: none; border-top: 1px solid #444; flex: 0 0 auto; max-height: 50%; }
+    .dock-btn { background: none; border: none; color: #808080; cursor: pointer; font-size: 14px; padding: 0 4px; }
+    .dock-btn:hover { color: #d4d4d4; }
+    #git-panel h6 { color: #ccc; margin-top: 12px; margin-bottom: 6px; }
+    .change-item { padding: 2px 4px; cursor: pointer; font-family: monospace; white-space: nowrap; }
+    .change-item:hover { background: #37373d; }
+    .change-new { color: #4ec9b0; }
+    .change-modified { color: #e2c08d; }
+    .change-deleted { color: #f48771; text-decoration: line-through; }
+    .commit-entry { font-size: 12px; border-bottom: 1px solid #333; padding: 4px 0; }
+    .commit-sha { color: #569cd6; font-family: monospace; }
+    .commit-msg { color: #d4d4d4; }
+    .commit-meta { color: #808080; font-size: 11px; }
+    .file-modified-dot { color: #e2c08d; margin-left: 4px; }
+    #ai-panel { background: #252526; border-left: 1px solid #444; font-size: 13px; display: flex; flex-direction: column; overflow: hidden; }
+    #ai-panel.hidden { display: none; }
+    #ai-panel.docked-left { border-left: none; border-top: 1px solid #444; flex: 0 0 auto; max-height: 50%; }
+    #ai-panel-header { padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; }
+    #editor-layout.ai-visible { grid-template-columns: 250px 1fr 350px; }
+    #editor-layout.ai-visible.panel-hidden { grid-template-columns: 250px 1fr 350px; }
+    #editor-layout.ai-visible.panel-left { grid-template-columns: 250px 1fr 350px; }
+    #ai-messages { flex: 1; overflow-y: auto; padding: 8px; font-family: -apple-system, sans-serif; font-size: 13px; }
+    .ai-msg { margin-bottom: 12px; line-height: 1.4; }
+    .ai-msg.user { color: #569cd6; }
+    .ai-msg.user::before { content: 'You: '; font-weight: bold; }
+    .ai-msg.assistant { color: #d4d4d4; }
+    .ai-msg.assistant pre { background: #1e1e1e; padding: 8px; border-radius: 4px; overflow-x: auto; margin: 4px 0; }
+    .ai-msg.assistant code { font-family: 'Cascadia Code', monospace; font-size: 12px; }
+    .ai-tool-call { padding: 4px 8px; margin: 2px 8px; background: #2d2d30; border-left: 2px solid #007acc; font-size: 12px; color: #808080; }
+    .ai-tool-call.running::after { content: ' ⏳'; }
+    .ai-tool-call.done::after { content: ' ✓'; color: #4ec9b0; }
+    .ai-tool-call.error::after { content: ' ✗'; color: #f48771; }
+    .ai-input-row { padding: 8px; border-top: 1px solid #444; display: flex; gap: 4px; align-items: flex-end; }
+    .ai-input-row textarea { flex: 1; background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 13px; resize: none; font-family: -apple-system, sans-serif; }
+    .ai-input-row button { background: #007acc; color: white; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+    .ai-input-row button:hover { background: #005999; }
+    .ai-input-row button.stop { background: #c53d3d; }
+    #ai-setup { padding: 16px; text-align: center; }
+    #ai-setup.hidden { display: none; }
+    #ai-setup input { width: 100%; background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; margin: 8px 0; font-size: 13px; }
+    #ai-setup button { background: #007acc; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer; }
+    #ai-skills-bar { padding: 4px 8px; border-top: 1px solid #444; display: flex; flex-wrap: wrap; gap: 4px; }
+    .skill-chip { background: #2d2d30; color: #808080; border: 1px solid #555; border-radius: 12px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+    .skill-chip:hover { background: #3c3c3c; color: #d4d4d4; }
+    .skill-chip.active { background: #007acc; color: white; border-color: #007acc; }
+    #ai-slash-menu { position: absolute; bottom: 100%; left: 8px; right: 8px; background: #252526; border: 1px solid #444; border-radius: 4px; max-height: 200px; overflow-y: auto; display: none; z-index: 100; }
+    #ai-slash-menu .slash-item { padding: 6px 10px; cursor: pointer; font-size: 12px; }
+    #ai-slash-menu .slash-item:hover, #ai-slash-menu .slash-item.selected { background: #094771; }
+    #ai-slash-menu .slash-item .slash-name { color: #569cd6; }
+    #ai-slash-menu .slash-item .slash-desc { color: #808080; margin-left: 8px; }
+    .provider-tab { background: #333; color: #888; border: 1px solid #555; padding: 2px 8px; font-size: 11px; cursor: pointer; border-radius: 3px; }
+    .provider-tab.active { background: #555; color: #fff; }
+    .provider-tab.configured::after { content: " \2713"; color: #5a5; }
+  </style>
+</head>
+<body>
+  <div id="editor-layout" class="panel-left ai-visible">
+    <div id="nav">
+      <select id="repo-select" class="form-select form-select-sm bg-dark text-light" style="width: 200px;">
+        <% repos.each do |repo| %>
+          <option value="<%= repo %>"><%= repo %></option>
+        <% end %>
+      </select>
+      <button id="save-btn" class="btn btn-sm btn-success" onclick="saveFile()">Save</button>
+      <button id="new-file-btn" class="btn btn-sm btn-outline-info" onclick="newFile()">New File</button>
+      <button id="delete-file-btn" class="btn btn-sm btn-outline-danger" onclick="deleteFile()">Delete File</button>
+      <button id="git-toggle" class="btn btn-sm btn-info ms-auto" onclick="toggleGitPanel()">Source Control</button>
+      <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleLogsPanel()" title="Build Logs">Logs</button>
+      <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleAiPanel()" title="AI Assistant">AI</button>
+      <a href="/git" class="btn btn-sm btn-outline-info">Git Dashboard</a>
+      <a href="/git" class="btn btn-sm btn-outline-light">Back</a>
+    </div>
+    <div id="left-sidebar">
+      <div id="file-tree"></div>
+      <div id="git-panel" class="docked-left">
+        <div class="d-flex justify-content-between align-items-center">
+          <strong>Source Control</strong>
+          <div>
+            <button class="dock-btn" id="dock-toggle" onclick="toggleDockSide()" title="Move panel">&#8644;</button>
+            <span id="branch-badge" class="badge bg-info">...</span>
+          </div>
+        </div>
+
+        <h6>Changed Files</h6>
+        <div id="changes-list"><span class="text-muted">Loading...</span></div>
+
+        <h6>Commit</h6>
+        <input id="commit-msg" class="form-control form-control-sm bg-dark text-light mb-2" placeholder="Commit message...">
+        <button class="btn btn-sm btn-success w-100" onclick="commitAndPush()">Commit &amp; Push</button>
+        <div id="commit-status" class="mt-2" style="font-size: 12px;"></div>
+
+        <h6>Recent Commits</h6>
+        <div id="recent-commits"><span class="text-muted">Loading...</span></div>
+      </div>
+    </div>
+    <div id="monaco-container"></div>
+    <div id="ai-panel">
+      <div id="ai-panel-header">
+        <span style="font-weight: bold; font-size: 12px; text-transform: uppercase; color: #808080;">AI Assistant</span>
+        <span style="display: flex; align-items: center; gap: 6px;">
+          <select id="ai-model-select" onchange="updateSelectedModel()" style="background: #2d2d2d; color: #ccc; border: 1px solid #555; font-size: 11px; padding: 2px 4px; max-width: 160px;">
+          </select>
+          <button class="dock-btn" onclick="toggleAiSetup()" title="API key settings" style="font-size: 14px;">&#9881;</button>
+          <button class="dock-btn" onclick="toggleAiDock()" title="Toggle dock side">&#8862;</button>
+        </span>
+      </div>
+      <div id="ai-setup" class="hidden">
+        <p style="color: #808080; font-size: 12px;">Configure AI provider API keys:</p>
+        <div id="ai-provider-tabs" style="display: flex; gap: 4px; margin-bottom: 8px;">
+          <button class="provider-tab active" onclick="selectProviderTab('anthropic')">Anthropic</button>
+          <button class="provider-tab" onclick="selectProviderTab('openai')">OpenAI</button>
+          <button class="provider-tab" onclick="selectProviderTab('gemini')">Gemini</button>
+        </div>
+        <input type="password" id="ai-key-input" placeholder="sk-ant-...">
+        <button onclick="saveApiKey()">Save Key</button>
+        <div id="ai-provider-status" style="margin-top: 6px; font-size: 11px; color: #808080;"></div>
+        <p id="ai-key-status" style="color: #808080; font-size: 11px; margin-top: 8px;"></p>
+      </div>
+      <div id="ai-chat-area" class="hidden" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+        <div id="ai-messages"></div>
+        <div id="ai-skills-bar"></div>
+        <div class="ai-input-row" style="position: relative;">
+          <div id="ai-slash-menu"></div>
+          <textarea id="ai-input" placeholder="Ask Claude... (/ for skills)" rows="2"></textarea>
+          <button onclick="sendAiMessage()" id="ai-send-btn">Send</button>
+          <button onclick="stopAi()" id="ai-stop-btn" class="stop" style="display:none;">Stop</button>
+        </div>
+      </div>
+    </div>
+    <div id="logs-panel" class="hidden" style="position:fixed;right:340px;top:40px;bottom:24px;width:400px;background:#1e1e1e;border-left:1px solid #333;display:flex;flex-direction:column;z-index:10;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #333;">
+        <span style="font-weight:600;color:#ccc;">Build Logs</span>
+        <div style="display:flex;gap:4px;">
+          <button onclick="filterLogs('all')" id="logs-filter-all" style="padding:2px 8px;background:#555;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">All</button>
+          <button onclick="filterLogs('error')" id="logs-filter-error" style="padding:2px 8px;background:#333;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">Errors</button>
+          <button onclick="refreshLogs()" style="padding:2px 8px;background:#333;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">&#x21bb;</button>
+          <button onclick="toggleLogsPanel()" style="padding:2px 8px;background:#333;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">&#x2715;</button>
+        </div>
+      </div>
+      <div id="logs-entries" style="overflow-y:auto;flex:1;padding:8px;font-family:monospace;font-size:12px;color:#ccc;"></div>
+    </div>
+    <div id="status-bar">Ready</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+  <script>
+    let editor;
+    let currentFile = null;
+    let gitPanelVisible = true;
+    let gitPanelDock = 'left';
+    let changedFiles = new Set();
+    let aiPanelVisible = true;
+    let aiPanelDock = 'right';
+    let aiConversation = [];
+    let aiAbortController = null;
+    let aiRunning = false;
+    let allSkills = [];
+    let selectedProvider = 'anthropic';
+    let selectedModel = null;
+    const AI_BASE_URL = '';
+    const repoSelect = document.getElementById('repo-select');
+
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      editor = monaco.editor.create(document.getElementById('monaco-container'), {
+        value: '// Select a file to edit',
+        language: 'ruby',
+        theme: 'vs-dark',
+        automaticLayout: true
+      });
+      loadFileTree();
+      checkApiKeyAndShow();
+      loadSkills();
+    });
+
+    repoSelect.addEventListener('change', loadFileTree);
+
+    function toggleGitPanel() {
+      gitPanelVisible = !gitPanelVisible;
+      const panel = document.getElementById('git-panel');
+      panel.classList.toggle('hidden', !gitPanelVisible);
+      applyLayoutClasses();
+      if (editor) editor.layout();
+    }
+
+    function toggleDockSide() {
+      const panel = document.getElementById('git-panel');
+      const sidebar = document.getElementById('left-sidebar');
+
+      if (gitPanelDock === 'right') {
+        gitPanelDock = 'left';
+        sidebar.appendChild(panel);
+        panel.classList.add('docked-left');
+        panel.classList.remove('hidden');
+        gitPanelVisible = true;
+      } else {
+        gitPanelDock = 'right';
+        // Insert after monaco-container to restore as 3rd grid column
+        document.getElementById('monaco-container').after(panel);
+        panel.classList.remove('docked-left');
+      }
+      applyLayoutClasses();
+      if (editor) editor.layout();
+    }
+
+    function applyLayoutClasses() {
+      const layout = document.getElementById('editor-layout');
+      layout.classList.remove('panel-hidden', 'panel-left', 'ai-visible', 'ai-hidden');
+
+      if (!gitPanelVisible || gitPanelDock === 'left') {
+        if (!gitPanelVisible) layout.classList.add('panel-hidden');
+        if (gitPanelDock === 'left' && gitPanelVisible) layout.classList.add('panel-left');
+      }
+
+      if (aiPanelVisible && aiPanelDock === 'right') {
+        layout.classList.add('ai-visible');
+      }
+      if (typeof aiPanelVisible !== 'undefined' && !aiPanelVisible) {
+        layout.classList.add('ai-hidden');
+      }
+    }
+
+    function getRepoParts() {
+      const repo = repoSelect.value;
+      const parts = repo.split('/');
+      return { ns: parts[0], name: parts[1], repo: repo };
+    }
+
+    function loadFileTree() {
+      pullAndRefresh().then(() => loadRecentCommits());
+    }
+
+    function pullAndRefresh() {
+      const { repo } = getRepoParts();
+      return fetch('/editor/api/pull?repo=' + encodeURIComponent(repo), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      })
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('branch-badge').textContent = data.branch;
+        renderFileTree(data.files);
+        return loadGitStatus();
+      })
+      .catch(() => {
+        // Fallback to regular file listing if pull fails
+        const { repo } = getRepoParts();
+        return fetch('/editor/api/files?repo=' + encodeURIComponent(repo))
+          .then(r => r.json())
+          .then(data => renderFileTree(data.files));
+      });
+    }
+
+    function loadGitStatus() {
+      const { ns, name } = getRepoParts();
+      return fetch('/git/api/repos/' + ns + '/' + name + '/status')
+        .then(r => r.json())
+        .then(data => {
+          changedFiles = new Set(data.changes.map(c => c.path));
+          renderChanges(data.changes);
+          updateFileTreeIndicators();
+        });
+    }
+
+    function renderChanges(changes) {
+      const el = document.getElementById('changes-list');
+      if (changes.length === 0) {
+        el.innerHTML = '<span class="text-muted">No changes</span>';
+        return;
+      }
+      el.innerHTML = changes.map(c => {
+        const status = Array.isArray(c.status) ? c.status[0] : c.status;
+        const cls = status === 'new' ? 'change-new' : status === 'deleted' ? 'change-deleted' : 'change-modified';
+        const escaped = c.path.replace(/'/g, "\\'");
+        return '<div class="change-item ' + cls + '" onclick="openFile(\'' + escaped + '\')">' + c.path + '</div>';
+      }).join('');
+    }
+
+    function updateFileTreeIndicators() {
+      document.querySelectorAll('.file-item').forEach(el => {
+        const dot = el.querySelector('.file-modified-dot');
+        if (dot) dot.remove();
+        const fullPath = el.dataset.path;
+        if (fullPath && changedFiles.has(fullPath)) {
+          const span = document.createElement('span');
+          span.className = 'file-modified-dot';
+          span.textContent = ' \u25cf';
+          el.appendChild(span);
+        }
+      });
+    }
+
+    function loadRecentCommits() {
+      const { ns, name } = getRepoParts();
+      fetch('/git/api/repos/' + ns + '/' + name + '/log?limit=5')
+        .then(r => r.json())
+        .then(data => {
+          const el = document.getElementById('recent-commits');
+          if (!data.commits || data.commits.length === 0) {
+            el.innerHTML = '<span class="text-muted">No commits</span>';
+            return;
+          }
+          el.innerHTML = data.commits.map(c =>
+            '<div class="commit-entry">' +
+              '<span class="commit-sha">' + c.oid + '</span> ' +
+              '<span class="commit-msg">' + c.message + '</span>' +
+              '<div class="commit-meta">' + c.author + '</div>' +
+            '</div>'
+          ).join('');
+        });
+    }
+
+    function commitAndPush() {
+      const msg = document.getElementById('commit-msg').value;
+      if (!msg) { alert('Enter a commit message'); return; }
+      const { ns, name } = getRepoParts();
+      const statusEl = document.getElementById('commit-status');
+      statusEl.innerHTML = '<span class="text-warning">Committing...</span>';
+
+      fetch('/git/api/repos/' + ns + '/' + name + '/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'committed') {
+          statusEl.innerHTML = '<span class="text-success">Committed \u2014 reloading area...</span>';
+          document.getElementById('commit-msg').value = '';
+          pullAndRefresh();
+          loadRecentCommits();
+          setTimeout(loadBuildLogs, 2000);
+        } else {
+          statusEl.innerHTML = '<span class="text-danger">Error: ' + (data.message || 'Unknown') + '</span>';
+        }
+      })
+      .catch(err => {
+        statusEl.innerHTML = '<span class="text-danger">Failed: ' + err.message + '</span>';
+      });
+    }
+
+    function renderFileTree(files) {
+      const tree = document.getElementById('file-tree');
+      tree.innerHTML = '';
+      const root = {};
+      files.forEach(f => {
+        const parts = f.path.split('/');
+        let node = root;
+        parts.forEach((p, i) => {
+          if (i === parts.length - 1) {
+            if (!node._files) node._files = [];
+            node._files.push({ name: p, path: f.path });
+          } else {
+            if (!node[p]) node[p] = {};
+            node = node[p];
+          }
+        });
+      });
+      renderNode(root, tree, 0);
+    }
+
+    function renderNode(node, parent, depth) {
+      const dirs = Object.keys(node).filter(k => k !== '_files').sort();
+      dirs.forEach(name => {
+        const dir = document.createElement('div');
+        dir.className = 'dir-item';
+        dir.style.paddingLeft = (depth * 16 + 4) + 'px';
+        dir.innerHTML = '<span class="arrow">&#9660;</span> ' + name;
+        const children = document.createElement('div');
+        children.className = 'dir-children';
+        dir.onclick = () => {
+          dir.classList.toggle('collapsed');
+          children.classList.toggle('hidden');
+        };
+        parent.appendChild(dir);
+        parent.appendChild(children);
+        renderNode(node[name], children, depth + 1);
+      });
+      if (node._files) {
+        node._files.sort((a, b) => a.name.localeCompare(b.name)).forEach(f => {
+          const el = document.createElement('div');
+          el.className = 'file-item';
+          el.style.paddingLeft = (depth * 16 + 4) + 'px';
+          el.textContent = f.name;
+          el.dataset.path = f.path;
+          el.onclick = () => openFile(f.path);
+          parent.appendChild(el);
+        });
+      }
+    }
+
+    function openFile(path) {
+      const repo = repoSelect.value;
+      fetch('/editor/api/files/' + encodeURIComponent(path) + '?repo=' + encodeURIComponent(repo))
+        .then(r => r.json())
+        .then(data => {
+          currentFile = path;
+          const ext = path.split('.').pop().toLowerCase();
+          const langMap = {
+            rb: 'ruby', erb: 'html', yml: 'yaml', yaml: 'yaml',
+            js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
+            svelte: 'html', vue: 'html', html: 'html', htm: 'html',
+            css: 'css', scss: 'scss', less: 'less',
+            json: 'json', md: 'markdown', sql: 'sql', sh: 'shell',
+            xml: 'xml', svg: 'xml'
+          };
+          const lang = langMap[ext] || 'plaintext';
+          monaco.editor.setModelLanguage(editor.getModel(), lang);
+          editor.setValue(data.content);
+          document.getElementById('status-bar').textContent = path;
+        });
+    }
+
+    function saveFile() {
+      if (!currentFile) return;
+      const repo = repoSelect.value;
+      fetch('/editor/api/files/' + encodeURIComponent(currentFile), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editor.getValue(), repo: repo })
+      }).then(r => {
+        document.getElementById('status-bar').textContent = r.ok ? currentFile + ' (saved)' : 'Save failed';
+        if (r.ok) loadGitStatus();
+      });
+    }
+
+    function newFile() {
+      const name = prompt('File name (e.g. rooms/new_room.rb):');
+      if (!name) return;
+      const repo = repoSelect.value;
+      fetch('/editor/api/files/' + encodeURIComponent(name), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: '', repo: repo })
+      }).then(r => {
+        if (r.ok) { loadFileTree(); openFile(name); }
+      });
+    }
+
+    function deleteFile() {
+      if (!currentFile) return;
+      if (!confirm('Delete ' + currentFile + '?')) return;
+      const repo = repoSelect.value;
+      fetch('/editor/api/files/' + encodeURIComponent(currentFile) + '?repo=' + encodeURIComponent(repo), {
+        method: 'DELETE'
+      }).then(r => {
+        if (r.ok) {
+          currentFile = null;
+          editor.setValue('');
+          document.getElementById('status-bar').textContent = 'No file selected';
+          loadFileTree();
+        }
+      });
+    }
+
+    document.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveFile();
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // Build Logs
+    // -----------------------------------------------------------------------
+
+    let currentLogFilter = 'all';
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function loadBuildLogs() {
+      const { ns, name: repoName } = getRepoParts();
+      try {
+        const r = await fetch(`/builder/${ns}/${repoName}/api/logs?limit=100&level=${currentLogFilter}`);
+        if (!r.ok) return;
+        const logs = await r.json();
+        renderLogs(logs);
+      } catch (e) {
+        console.error('Failed to load build logs:', e);
+      }
+    }
+
+    function renderLogs(logs) {
+      const el = document.getElementById('logs-entries');
+      if (!logs || !logs.length) {
+        el.innerHTML = '<div style="color:#666;padding:12px;">No logs yet. Logs appear after area load/reload.</div>';
+        return;
+      }
+      el.innerHTML = logs.slice().reverse().map(e => {
+        const color = e.level === 'error' ? '#f44' : e.level === 'warn' ? '#fa0' : '#666';
+        const bt = e.backtrace ? `<pre style="color:#999;margin:4px 0 0 16px;white-space:pre-wrap;font-size:11px;">${escapeHtml(e.backtrace)}</pre>` : '';
+        return `<div style="margin-bottom:6px;border-left:3px solid ${color};padding:4px 8px;">
+          <span style="color:#555;font-size:11px;">${escapeHtml(e.ts || '')}</span>
+          <span style="color:${color};font-weight:600;margin:0 6px;">[${escapeHtml(e.event || '')}]</span>
+          <span style="color:#ccc;">${escapeHtml(e.message || '')}</span>${bt}
+        </div>`;
+      }).join('');
+    }
+
+    function filterLogs(level) {
+      currentLogFilter = level;
+      document.getElementById('logs-filter-all').style.background = level === 'all' ? '#555' : '#333';
+      document.getElementById('logs-filter-error').style.background = level === 'error' ? '#555' : '#333';
+      loadBuildLogs();
+    }
+
+    function refreshLogs() { loadBuildLogs(); }
+
+    function toggleLogsPanel() {
+      const panel = document.getElementById('logs-panel');
+      panel.classList.toggle('hidden');
+      if (!panel.classList.contains('hidden')) loadBuildLogs();
+    }
+
+    // -----------------------------------------------------------------------
+    // AI Assistant
+    // -----------------------------------------------------------------------
+
+    // --- AI Tool Definitions ---
+    const AI_TOOLS = [
+      {
+        name: 'list_files',
+        description: 'List all files in the current workspace. Returns an array of {path, size} objects.',
+        input_schema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'read_file',
+        description: 'Read the contents of a file. Returns the file content as a string.',
+        input_schema: {
+          type: 'object',
+          properties: { path: { type: 'string', description: 'Relative file path, e.g. rooms/start.rb' } },
+          required: ['path']
+        }
+      },
+      {
+        name: 'write_file',
+        description: 'Write/overwrite the contents of an existing file.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Relative file path' },
+            content: { type: 'string', description: 'The full new file content' }
+          },
+          required: ['path', 'content']
+        }
+      },
+      {
+        name: 'create_file',
+        description: 'Create a new file. Fails if file already exists.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Relative file path to create' },
+            content: { type: 'string', description: 'Initial file content' }
+          },
+          required: ['path', 'content']
+        }
+      },
+      {
+        name: 'delete_file',
+        description: 'Delete a file from the workspace.',
+        input_schema: {
+          type: 'object',
+          properties: { path: { type: 'string', description: 'Relative file path to delete' } },
+          required: ['path']
+        }
+      },
+      {
+        name: 'git_status',
+        description: 'Get the git status showing changed/new/deleted files in the workspace.',
+        input_schema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'git_log',
+        description: 'Get recent git commit history.',
+        input_schema: {
+          type: 'object',
+          properties: { limit: { type: 'number', description: 'Number of commits to return (default 10)' } },
+          required: []
+        }
+      },
+      {
+        name: 'git_commit',
+        description: 'Commit all changes and push. This also triggers a live area reload.',
+        input_schema: {
+          type: 'object',
+          properties: { message: { type: 'string', description: 'Commit message' } },
+          required: ['message']
+        }
+      },
+      {
+        name: 'play_command',
+        description: 'Run a game command in the MUD to test changes. Use after committing to verify your changes work in-game. Example commands: look, go north, examine sword, inventory.',
+        input_schema: {
+          type: 'object',
+          properties: { command: { type: 'string', description: 'The game command to execute' } },
+          required: ['command']
+        }
+      },
+      {
+        name: 'view_build_logs',
+        description: 'View recent build/reload logs for this area. Shows load errors, migration results, SPA build output, and reload status. Use this to diagnose why an area failed to load or to check if a reload succeeded.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', description: 'Number of recent log entries to return (default 50, max 200)' },
+            level: { type: 'string', enum: ['all', 'error', 'warn'], description: 'Filter by minimum log level (default: all)' }
+          }
+        }
+      }
+    ];
+
+    // --- Tool Execution ---
+    async function executeTool(name, input) {
+      const { ns, name: repoName, repo } = getRepoParts();
+      const baseUrl = '';
+
+      switch (name) {
+        case 'list_files': {
+          const r = await fetch(`${baseUrl}/editor/api/files?repo=${repo}`);
+          return await r.json();
+        }
+        case 'read_file': {
+          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`);
+          if (!r.ok) return { error: `File not found: ${input.path}` };
+          const data = await r.json();
+          return { content: data.content };
+        }
+        case 'write_file': {
+          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: input.content, repo })
+          });
+          if (!r.ok) return { error: `Failed to write: ${input.path}` };
+          if (input.path === currentFile) {
+            editor.setValue(input.content);
+          }
+          loadGitStatus();
+          return { status: 'ok' };
+        }
+        case 'create_file': {
+          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: input.content, repo })
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            return { error: err.error || `Failed to create: ${input.path}` };
+          }
+          loadGitStatus();
+          return { status: 'created' };
+        }
+        case 'delete_file': {
+          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo })
+          });
+          if (!r.ok) return { error: `Failed to delete: ${input.path}` };
+          loadGitStatus();
+          return { status: 'deleted' };
+        }
+        case 'git_status': {
+          const r = await fetch(`${baseUrl}/git/api/repos/${ns}/${repoName}/status`);
+          return await r.json();
+        }
+        case 'git_log': {
+          const limit = input.limit || 10;
+          const r = await fetch(`${baseUrl}/git/api/repos/${ns}/${repoName}/log?limit=${limit}`);
+          return await r.json();
+        }
+        case 'git_commit': {
+          const r = await fetch(`${baseUrl}/git/api/repos/${ns}/${repoName}/commit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: input.message })
+          });
+          if (!r.ok) return { error: 'Commit failed' };
+          pullAndRefresh();
+          loadRecentCommits();
+          setTimeout(loadBuildLogs, 2000);
+          return await r.json();
+        }
+        case 'play_command': {
+          const r = await fetch(`${baseUrl}/play/command`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input: input.command })
+          });
+          if (!r.ok) return { error: 'Play session not active. Start a play session first.' };
+          return await r.json();
+        }
+        case 'view_build_logs': {
+          const params = new URLSearchParams();
+          if (input.limit) params.set('limit', input.limit);
+          if (input.level) params.set('level', input.level);
+          const r = await fetch(`/builder/${ns}/${repoName}/api/logs?${params}`);
+          return await r.json();
+        }
+        default:
+          return { error: `Unknown tool: ${name}` };
+      }
+    }
+
+    // --- SSE Stream Parser ---
+    async function parseSSEStream(response, signal) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentMessage = { content: [], stop_reason: null };
+      let currentBlock = null;
+      let currentBlockIndex = -1;
+      let textEl = null;
+      let toolJsonStr = '';
+
+      try {
+        while (true) {
+          if (signal && signal.aborted) return null;
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              if (data === '[DONE]') return currentMessage;
+
+              try {
+                const event = JSON.parse(data);
+
+                switch (event.type) {
+                  case 'message_start':
+                    currentMessage = { content: [], stop_reason: null };
+                    break;
+
+                  case 'content_block_start':
+                    currentBlockIndex = event.index;
+                    if (event.content_block.type === 'text') {
+                      currentBlock = { type: 'text', text: '' };
+                      textEl = appendAiMessage('assistant', '');
+                    } else if (event.content_block.type === 'tool_use') {
+                      currentBlock = { type: 'tool_use', id: event.content_block.id, name: event.content_block.name, input: {} };
+                      toolJsonStr = '';
+                    }
+                    break;
+
+                  case 'content_block_delta':
+                    if (event.delta.type === 'text_delta' && currentBlock && currentBlock.type === 'text') {
+                      currentBlock.text += event.delta.text;
+                      if (textEl) textEl.innerHTML = renderMarkdown(currentBlock.text);
+                    } else if (event.delta.type === 'input_json_delta' && currentBlock && currentBlock.type === 'tool_use') {
+                      toolJsonStr += event.delta.partial_json;
+                    }
+                    break;
+
+                  case 'content_block_stop':
+                    if (currentBlock) {
+                      if (currentBlock.type === 'tool_use' && toolJsonStr) {
+                        try { currentBlock.input = JSON.parse(toolJsonStr); } catch (e) {}
+                      }
+                      currentMessage.content.push(currentBlock);
+                      currentBlock = null;
+                      textEl = null;
+                      toolJsonStr = '';
+                    }
+                    break;
+
+                  case 'message_delta':
+                    if (event.delta && event.delta.stop_reason) {
+                      currentMessage.stop_reason = event.delta.stop_reason;
+                    }
+                    break;
+
+                  case 'message_stop':
+                    return currentMessage;
+                }
+              } catch (e) {
+                // Skip malformed JSON lines
+              }
+            }
+          }
+        }
+      } catch (e) {
+        if (e.name !== 'AbortError') throw e;
+      }
+
+      return currentMessage;
+    }
+
+    // --- Agent Loop ---
+    async function runAgentLoop() {
+      aiRunning = true;
+      document.getElementById('ai-send-btn').style.display = 'none';
+      document.getElementById('ai-stop-btn').style.display = '';
+
+      const systemPrompt = await buildSystemPrompt();
+
+      while (aiRunning) {
+        aiAbortController = new AbortController();
+
+        let response;
+        try {
+          response = await fetch(`${AI_BASE_URL}/api/ai/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            signal: aiAbortController.signal,
+            body: JSON.stringify({
+              messages: aiConversation,
+              tools: AI_TOOLS,
+              system: systemPrompt,
+              provider: selectedProvider,
+              model: selectedModel,
+            })
+          });
+        } catch (e) {
+          if (e.name === 'AbortError') break;
+          appendAiMessage('assistant', `Error: ${e.message}`);
+          break;
+        }
+
+        if (!response.ok) {
+          const err = await response.text();
+          appendAiMessage('assistant', `Error: ${err}`);
+          break;
+        }
+
+        const result = await parseSSEStream(response, aiAbortController.signal);
+
+        if (!result || !aiRunning) break;
+
+        aiConversation.push({ role: 'assistant', content: result.content });
+
+        if (result.stop_reason === 'end_turn') {
+          break;
+        }
+
+        if (result.stop_reason === 'tool_use') {
+          const toolResults = [];
+          for (const block of result.content) {
+            if (block.type === 'tool_use') {
+              const toolEl = showToolCall(block.name, block.input);
+              try {
+                const toolResult = await executeTool(block.name, block.input);
+                markToolDone(toolEl);
+                toolResults.push({
+                  type: 'tool_result',
+                  tool_use_id: block.id,
+                  content: JSON.stringify(toolResult)
+                });
+              } catch (e) {
+                markToolError(toolEl, e.message);
+                toolResults.push({
+                  type: 'tool_result',
+                  tool_use_id: block.id,
+                  content: JSON.stringify({ error: e.message }),
+                  is_error: true
+                });
+              }
+            }
+          }
+          aiConversation.push({ role: 'user', content: toolResults });
+          continue;
+        }
+
+        break;
+      }
+
+      aiRunning = false;
+      document.getElementById('ai-send-btn').style.display = '';
+      document.getElementById('ai-stop-btn').style.display = 'none';
+    }
+
+    // --- AI UI Helpers ---
+    function appendAiMessage(role, text) {
+      const el = document.createElement('div');
+      el.className = `ai-msg ${role}`;
+      el.innerHTML = renderMarkdown(text);
+      document.getElementById('ai-messages').appendChild(el);
+      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return el;
+    }
+
+    function showToolCall(name, input) {
+      const el = document.createElement('div');
+      el.className = 'ai-tool-call running';
+      const desc = name === 'read_file' ? `Reading ${input.path}` :
+                   name === 'write_file' ? `Writing ${input.path}` :
+                   name === 'create_file' ? `Creating ${input.path}` :
+                   name === 'delete_file' ? `Deleting ${input.path}` :
+                   name === 'git_commit' ? `Committing: ${input.message}` :
+                   name === 'play_command' ? `> ${input.command}` :
+                   name;
+      el.textContent = desc;
+      document.getElementById('ai-messages').appendChild(el);
+      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return el;
+    }
+
+    function markToolDone(el) { el.classList.remove('running'); el.classList.add('done'); }
+    function markToolError(el, msg) { el.classList.remove('running'); el.classList.add('error'); el.title = msg; }
+
+    function renderMarkdown(text) {
+      if (!text) return '';
+      return text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+    }
+
+    // --- System Prompt Builder ---
+    async function buildSystemPrompt() {
+      const { repo } = getRepoParts();
+      let prompt = `You are an AI coding assistant for a MUD (Multi-User Dungeon) area editor.
+You are helping a builder work on the area "${repo}".
+You have tools to read, write, create, and delete files in the workspace, manage git, and test changes in-game.
+
+When editing files, always read them first to understand the current content before writing.
+After making changes, use git_commit to save your work and trigger a live area reload.
+You can test your changes in-game using play_command.
+`;
+
+      let fileList = null;
+      try {
+        fileList = await fetch(`/editor/api/files?repo=${repo}`).then(r => r.json());
+        prompt += `\n## Files in workspace\n${fileList.files.map(f => `- ${f.path} (${f.size} bytes)`).join('\n')}\n`;
+      } catch (e) {}
+
+      if (currentFile) {
+        prompt += `\n## Currently open file\n${currentFile}\n`;
+      }
+
+      // Load agents.md (platform API reference) if it exists
+      if (fileList && fileList.files.some(f => f.path === 'agents.md')) {
+        try {
+          const agentsData = await fetch(`/editor/api/files/${encodeURIComponent('agents.md')}?repo=${repo}`).then(r => r.json());
+          prompt += `\n## Platform API Reference\n${agentsData.content}\n`;
+        } catch (e) {}
+      }
+
+      for (const skill of allSkills) {
+        if (skill.source !== 'builder') {
+          prompt += `\n## Skill: ${skill.name}\n${skill.content || skill.description}\n`;
+        }
+      }
+
+      if (fileList) {
+        const skillFiles = fileList.files.filter(f => f.path.startsWith('.skills/') && f.path.endsWith('.md'));
+        for (const sf of skillFiles) {
+          try {
+            const data = await fetch(`/editor/api/files/${encodeURIComponent(sf.path)}?repo=${repo}`).then(r => r.json());
+            prompt += `\n## Builder Skill: ${sf.path}\n${data.content}\n`;
+          } catch (e) {}
+        }
+      }
+
+      return prompt;
+    }
+
+    // --- AI Panel Toggle Functions ---
+    function toggleAiPanel() {
+      aiPanelVisible = !aiPanelVisible;
+      const panel = document.getElementById('ai-panel');
+      if (aiPanelVisible) {
+        panel.classList.remove('hidden');
+        checkApiKeyAndShow();
+        loadSkills();
+      } else {
+        panel.classList.add('hidden');
+      }
+      applyLayoutClasses();
+      editor.layout();
+    }
+
+    function toggleAiSetup() {
+      const setup = document.getElementById('ai-setup');
+      setup.classList.toggle('hidden');
+    }
+
+    function selectProviderTab(provider) {
+      selectedProvider = provider;
+      document.querySelectorAll('.provider-tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`.provider-tab[onclick*="${provider}"]`).classList.add('active');
+      const placeholders = {
+        anthropic: 'sk-ant-...',
+        openai: 'sk-...',
+        gemini: 'AI...'
+      };
+      document.getElementById('ai-key-input').placeholder = placeholders[provider] || 'API key...';
+      document.getElementById('ai-key-input').value = '';
+    }
+
+    function toggleAiDock() {
+      const panel = document.getElementById('ai-panel');
+      const sidebar = document.getElementById('left-sidebar');
+      const monacoContainer = document.getElementById('monaco-container');
+
+      if (aiPanelDock === 'right') {
+        aiPanelDock = 'left';
+        sidebar.appendChild(panel);
+        panel.classList.add('docked-left');
+      } else {
+        aiPanelDock = 'right';
+        const gitPanel = document.getElementById('git-panel');
+        if (gitPanel && gitPanel.parentElement === document.getElementById('editor-layout')) {
+          gitPanel.after(panel);
+        } else {
+          monacoContainer.after(panel);
+        }
+        panel.classList.remove('docked-left');
+      }
+      applyLayoutClasses();
+      editor.layout();
+    }
+
+    async function checkApiKeyAndShow() {
+      try {
+        const r = await fetch(`${AI_BASE_URL}/api/ai/apikey`, { credentials: 'include' });
+        if (r.status === 401 || r.status === 403) {
+          document.getElementById('ai-setup').classList.remove('hidden');
+          document.getElementById('ai-key-status').textContent = 'Please log in first.';
+          return;
+        }
+        if (!r.ok) {
+          document.getElementById('ai-setup').classList.remove('hidden');
+          document.getElementById('ai-key-status').textContent = 'AI service error (' + r.status + ')';
+          return;
+        }
+        const data = await r.json();
+        const hasAnyKey = data.providers
+          ? Object.values(data.providers).some(v => v)
+          : data.exists;
+
+        // Mark configured tabs (multi-provider)
+        if (data.providers) {
+          document.querySelectorAll('.provider-tab').forEach(tab => {
+            const label = tab.textContent.trim().toLowerCase();
+            const providerKey = label === 'openai' ? 'openai' : label;
+            if (data.providers[providerKey]) {
+              tab.classList.add('configured');
+            } else {
+              tab.classList.remove('configured');
+            }
+          });
+        }
+
+        if (hasAnyKey) {
+          document.getElementById('ai-chat-area').classList.remove('hidden');
+          document.getElementById('ai-chat-area').style.display = 'flex';
+          loadModels();
+        }
+        // Always show setup so user can add more keys
+        document.getElementById('ai-setup').classList.remove('hidden');
+      } catch (e) {
+        document.getElementById('ai-setup').classList.remove('hidden');
+        document.getElementById('ai-key-status').textContent = 'Cannot reach AI server';
+      }
+    }
+
+    async function saveApiKey() {
+      const key = document.getElementById('ai-key-input').value.trim();
+      if (!key) return;
+      const statusEl = document.getElementById('ai-key-status');
+      statusEl.textContent = 'Saving...';
+      try {
+        const r = await fetch(`${AI_BASE_URL}/api/ai/apikey`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ api_key: key, provider: selectedProvider })
+        });
+        if (r.ok) {
+          statusEl.textContent = `${selectedProvider} key saved!`;
+          statusEl.style.color = '#5a5';
+          document.getElementById('ai-key-input').value = '';
+          checkApiKeyAndShow();
+        } else {
+          const err = await r.json().catch(() => ({}));
+          statusEl.textContent = err.error || 'Failed to save key';
+          statusEl.style.color = '#f48771';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Failed to save key: ' + e.message;
+        statusEl.style.color = '#f48771';
+      }
+    }
+
+    async function loadModels() {
+      try {
+        const r = await fetch(`${AI_BASE_URL}/api/ai/models`, { credentials: 'include' });
+        if (!r.ok) return;
+        const data = await r.json();
+        const select = document.getElementById('ai-model-select');
+        select.innerHTML = '';
+        const providers = data.providers || data;
+        for (const [provider, models] of Object.entries(providers)) {
+          if (!models || models.length === 0) continue;
+          const group = document.createElement('optgroup');
+          group.label = provider.charAt(0).toUpperCase() + provider.slice(1);
+          for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify({ provider, model: m.id });
+            opt.textContent = m.name;
+            group.appendChild(opt);
+          }
+          select.appendChild(group);
+        }
+        if (select.options.length > 0) {
+          select.selectedIndex = 0;
+          updateSelectedModel();
+        }
+      } catch (e) {
+        console.error('Failed to load models:', e);
+      }
+    }
+
+    function updateSelectedModel() {
+      const select = document.getElementById('ai-model-select');
+      if (select.value) {
+        const parsed = JSON.parse(select.value);
+        selectedProvider = parsed.provider;
+        selectedModel = parsed.model;
+      }
+    }
+
+    function sendAiMessage() {
+      const input = document.getElementById('ai-input');
+      const text = input.value.trim();
+      if (!text || aiRunning) return;
+
+      let messageText = text;
+      if (text.startsWith('/')) {
+        const parts = text.match(/^\/(\S+)\s*(.*)/);
+        if (parts) {
+          const skillName = parts[1];
+          const args = parts[2];
+          const skill = allSkills.find(s => s.name === skillName);
+          if (skill && skill.content) {
+            messageText = `[Using skill: ${skill.name}]\n\n${skill.content}\n\n${args}`;
+          }
+        }
+      }
+
+      appendAiMessage('user', text);
+      aiConversation.push({ role: 'user', content: messageText });
+      input.value = '';
+
+      runAgentLoop();
+    }
+
+    function stopAi() {
+      aiRunning = false;
+      if (aiAbortController) aiAbortController.abort();
+    }
+
+    // --- Skills Loading ---
+    async function loadSkills() {
+      allSkills = [];
+
+      try {
+        const r = await fetch(`${AI_BASE_URL}/api/ai/skills`, { credentials: 'include' });
+        if (r.ok) {
+          const skills = await r.json();
+          for (const s of skills) {
+            allSkills.push({ ...s, source: 'platform' });
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const { repo } = getRepoParts();
+        const files = await fetch(`/editor/api/files?repo=${repo}`).then(r => r.json());
+        const skillFiles = files.files.filter(f => f.path.startsWith('.skills/') && f.path.endsWith('.md'));
+        for (const sf of skillFiles) {
+          const name = sf.path.replace('.skills/', '').replace('.md', '');
+          allSkills.push({ name, description: `Builder skill: ${name}`, source: 'builder', path: sf.path });
+        }
+      } catch (e) {}
+
+      renderSkillsBar();
+    }
+
+    function renderSkillsBar() {
+      const bar = document.getElementById('ai-skills-bar');
+      bar.innerHTML = '';
+      if (!allSkills.length) return;
+
+      allSkills
+        .filter(s => s.user_invocable !== false)
+        .forEach(s => {
+          const chip = document.createElement('span');
+          chip.className = 'skill-chip';
+          chip.textContent = s.name;
+          chip.title = s.description || '';
+          chip.addEventListener('click', () => insertSkillCommand(s.name));
+          bar.appendChild(chip);
+        });
+    }
+
+    function insertSkillCommand(name) {
+      const input = document.getElementById('ai-input');
+      input.value = `/${name} `;
+      input.focus();
+    }
+
+    // --- Slash Command Autocomplete ---
+    document.getElementById('ai-input').addEventListener('input', function(e) {
+      const text = this.value;
+      const menu = document.getElementById('ai-slash-menu');
+
+      if (text.startsWith('/') && !text.includes('\n')) {
+        const query = text.slice(1).toLowerCase();
+        const matches = allSkills.filter(s => s.user_invocable !== false && s.name.toLowerCase().startsWith(query));
+
+        if (matches.length > 0 && query.length > 0) {
+          menu.innerHTML = '';
+          matches.forEach(s => {
+            const item = document.createElement('div');
+            item.className = 'slash-item';
+            item.addEventListener('click', () => selectSlashCommand(s.name));
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'slash-name';
+            nameSpan.textContent = '/' + s.name;
+            const descSpan = document.createElement('span');
+            descSpan.className = 'slash-desc';
+            descSpan.textContent = s.description || '';
+            item.appendChild(nameSpan);
+            item.appendChild(descSpan);
+            menu.appendChild(item);
+          });
+          menu.style.display = 'block';
+        } else {
+          menu.style.display = 'none';
+        }
+      } else {
+        menu.style.display = 'none';
+      }
+    });
+
+    function selectSlashCommand(name) {
+      document.getElementById('ai-input').value = `/${name} `;
+      document.getElementById('ai-slash-menu').style.display = 'none';
+      document.getElementById('ai-input').focus();
+    }
+
+    // --- AI Input Keyboard Shortcut ---
+    document.getElementById('ai-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAiMessage();
+      }
+    });
+  </script>
+</body>
+</html>
