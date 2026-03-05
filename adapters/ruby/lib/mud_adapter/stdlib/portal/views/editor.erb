@@ -65,6 +65,7 @@
     .ai-input-row button.stop { background: #c53d3d; }
     #ai-setup { padding: 16px; text-align: center; }
     #ai-setup.hidden { display: none; }
+    #logs-panel.hidden { display: none !important; }
     #ai-setup input { width: 100%; background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; margin: 8px 0; font-size: 13px; }
     #ai-setup button { background: #007acc; color: white; border: none; border-radius: 4px; padding: 8px 16px; cursor: pointer; }
     #ai-skills-bar { padding: 4px 8px; border-top: 1px solid #444; display: flex; flex-wrap: wrap; gap: 4px; }
@@ -79,6 +80,21 @@
     .provider-tab { background: #333; color: #888; border: 1px solid #555; padding: 2px 8px; font-size: 11px; cursor: pointer; border-radius: 3px; }
     .provider-tab.active { background: #555; color: #fff; }
     .provider-tab.configured::after { content: " \2713"; color: #5a5; }
+    .toggle-switch { position: relative; display: inline-block; width: 28px; height: 16px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #555; border-radius: 8px; transition: 0.2s; }
+    .toggle-switch .slider::before { content: ""; position: absolute; height: 12px; width: 12px; left: 2px; bottom: 2px; background: #aaa; border-radius: 50%; transition: 0.2s; }
+    .toggle-switch input:checked + .slider { background: #2a6; }
+    .toggle-switch input:checked + .slider::before { transform: translateX(12px); background: #fff; }
+    .toggle-switch input:disabled + .slider { opacity: 0.4; cursor: not-allowed; }
+    .provider-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; }
+    .provider-row .provider-name { flex: 1; cursor: pointer; }
+    .provider-row .provider-name.active { color: #fff; font-weight: bold; }
+    .custom-provider-item { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 11px; color: #aaa; }
+    .custom-provider-item .cp-name { flex: 1; }
+    .custom-provider-item .cp-mode { color: #666; font-size: 10px; }
+    .cp-btn { background: none; border: 1px solid #555; color: #888; font-size: 10px; padding: 1px 5px; cursor: pointer; border-radius: 2px; }
+    .cp-btn:hover { color: #fff; border-color: #888; }
   </style>
 </head>
 <body>
@@ -99,6 +115,10 @@
       <a href="/git" class="btn btn-sm btn-outline-light">Back</a>
     </div>
     <div id="left-sidebar">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid #333;">
+        <span style="font-size:11px;color:#808080;text-transform:uppercase;font-weight:600;">Files</span>
+        <button onclick="loadFileTree()" title="Refresh file list" style="background:none;border:none;color:#808080;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;" onmouseover="this.style.color='#ccc'" onmouseout="this.style.color='#808080'">&#x21bb;</button>
+      </div>
       <div id="file-tree"></div>
       <div id="git-panel" class="docked-left">
         <div class="d-flex justify-content-between align-items-center">
@@ -133,16 +153,38 @@
         </span>
       </div>
       <div id="ai-setup" class="hidden">
-        <p style="color: #808080; font-size: 12px;">Configure AI provider API keys:</p>
-        <div id="ai-provider-tabs" style="display: flex; gap: 4px; margin-bottom: 8px;">
-          <button class="provider-tab active" onclick="selectProviderTab('anthropic')">Anthropic</button>
-          <button class="provider-tab" onclick="selectProviderTab('openai')">OpenAI</button>
-          <button class="provider-tab" onclick="selectProviderTab('gemini')">Gemini</button>
+        <p style="color: #808080; font-size: 12px;">AI Providers:</p>
+        <div id="ai-provider-list" style="margin-bottom: 8px;"></div>
+        <div id="ai-key-form" style="margin-bottom: 8px;">
+          <input type="password" id="ai-key-input" placeholder="sk-ant-..." style="width: 70%;">
+          <button onclick="saveApiKey()">Save Key</button>
         </div>
-        <input type="password" id="ai-key-input" placeholder="sk-ant-...">
-        <button onclick="saveApiKey()">Save Key</button>
         <div id="ai-provider-status" style="margin-top: 6px; font-size: 11px; color: #808080;"></div>
-        <p id="ai-key-status" style="color: #808080; font-size: 11px; margin-top: 8px;"></p>
+        <p id="ai-key-status" style="color: #808080; font-size: 11px; margin-top: 4px;"></p>
+        <div style="border-top: 1px solid #333; margin-top: 8px; padding-top: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="color: #808080; font-size: 11px; font-weight: bold;">Custom LLMs</span>
+            <button class="cp-btn" id="add-custom-btn" onclick="showAddCustomForm()">+ Add</button>
+          </div>
+          <div id="custom-provider-list"></div>
+          <div id="custom-provider-form" class="hidden" style="border: 1px solid #444; padding: 6px; border-radius: 3px; margin-top: 4px;">
+            <input type="text" id="cp-name" placeholder="Name (e.g. Local Llama)" style="width: 100%; margin-bottom: 4px; font-size: 11px;">
+            <input type="text" id="cp-url" placeholder="http://localhost:11434" style="width: 100%; margin-bottom: 4px; font-size: 11px;">
+            <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+              <select id="cp-mode" style="flex: 1; font-size: 11px;">
+                <option value="ollama">Ollama</option>
+                <option value="openai">OpenAI-compatible</option>
+                <option value="anthropic">Anthropic-compatible</option>
+              </select>
+              <input type="password" id="cp-key" placeholder="API key (optional)" style="flex: 1; font-size: 11px;">
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <button class="cp-btn" onclick="saveCustomProvider()">Save</button>
+              <button class="cp-btn" onclick="hideAddCustomForm()">Cancel</button>
+            </div>
+            <p id="cp-status" style="color: #808080; font-size: 10px; margin: 4px 0 0;"></p>
+          </div>
+        </div>
       </div>
       <div id="ai-chat-area" class="hidden" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
         <div id="ai-messages"></div>
@@ -274,7 +316,7 @@
       .catch(() => {
         // Fallback to regular file listing if pull fails
         const { repo } = getRepoParts();
-        return fetch('/editor/api/files?repo=' + encodeURIComponent(repo))
+        return fetch('/api/editor/files?repo=' + encodeURIComponent(repo))
           .then(r => r.json())
           .then(data => renderFileTree(data.files));
       });
@@ -420,7 +462,7 @@
 
     function openFile(path) {
       const repo = repoSelect.value;
-      fetch('/editor/api/files/' + encodeURIComponent(path) + '?repo=' + encodeURIComponent(repo))
+      fetch('/api/editor/files/' + encodeURIComponent(path) + '?repo=' + encodeURIComponent(repo))
         .then(r => r.json())
         .then(data => {
           currentFile = path;
@@ -443,10 +485,10 @@
     function saveFile() {
       if (!currentFile) return;
       const repo = repoSelect.value;
-      fetch('/editor/api/files/' + encodeURIComponent(currentFile), {
+      fetch('/api/editor/files/' + encodeURIComponent(currentFile) + '?repo=' + encodeURIComponent(repo), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: editor.getValue(), repo: repo })
+        body: JSON.stringify({ content: editor.getValue() })
       }).then(r => {
         document.getElementById('status-bar').textContent = r.ok ? currentFile + ' (saved)' : 'Save failed';
         if (r.ok) loadGitStatus();
@@ -457,10 +499,10 @@
       const name = prompt('File name (e.g. rooms/new_room.rb):');
       if (!name) return;
       const repo = repoSelect.value;
-      fetch('/editor/api/files/' + encodeURIComponent(name), {
+      fetch('/api/editor/files/' + encodeURIComponent(name) + '?repo=' + encodeURIComponent(repo), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: '', repo: repo })
+        body: JSON.stringify({ content: '' })
       }).then(r => {
         if (r.ok) { loadFileTree(); openFile(name); }
       });
@@ -470,7 +512,7 @@
       if (!currentFile) return;
       if (!confirm('Delete ' + currentFile + '?')) return;
       const repo = repoSelect.value;
-      fetch('/editor/api/files/' + encodeURIComponent(currentFile) + '?repo=' + encodeURIComponent(repo), {
+      fetch('/api/editor/files/' + encodeURIComponent(currentFile) + '?repo=' + encodeURIComponent(repo), {
         method: 'DELETE'
       }).then(r => {
         if (r.ok) {
@@ -504,10 +546,18 @@
     async function loadBuildLogs() {
       const { ns, name: repoName } = getRepoParts();
       try {
-        const r = await fetch(`/builder/${ns}/${repoName}/api/logs?limit=100&level=${currentLogFilter}`);
-        if (!r.ok) return;
-        const logs = await r.json();
-        renderLogs(logs);
+        // Fetch logs from both main and @dev area keys
+        const allLogs = [];
+        for (const key of [repoName, `${repoName}@dev`]) {
+          const r = await fetch(`/api/builder/${ns}/${key}/logs?limit=100&level=${currentLogFilter}`);
+          if (r.ok) {
+            const logs = await r.json();
+            allLogs.push(...logs);
+          }
+        }
+        // Sort by timestamp and deduplicate
+        allLogs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        renderLogs(allLogs);
       } catch (e) {
         console.error('Failed to load build logs:', e);
       }
@@ -650,20 +700,20 @@
 
       switch (name) {
         case 'list_files': {
-          const r = await fetch(`${baseUrl}/editor/api/files?repo=${repo}`);
+          const r = await fetch(`${baseUrl}/api/editor/files?repo=${repo}`);
           return await r.json();
         }
         case 'read_file': {
-          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`);
+          const r = await fetch(`${baseUrl}/api/editor/files/${encodeURIComponent(input.path)}?repo=${repo}`);
           if (!r.ok) return { error: `File not found: ${input.path}` };
           const data = await r.json();
           return { content: data.content };
         }
         case 'write_file': {
-          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+          const r = await fetch(`${baseUrl}/api/editor/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: input.content, repo })
+            body: JSON.stringify({ content: input.content })
           });
           if (!r.ok) return { error: `Failed to write: ${input.path}` };
           if (input.path === currentFile) {
@@ -673,25 +723,25 @@
           return { status: 'ok' };
         }
         case 'create_file': {
-          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+          const r = await fetch(`${baseUrl}/api/editor/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: input.content, repo })
+            body: JSON.stringify({ content: input.content })
           });
           if (!r.ok) {
             const err = await r.json().catch(() => ({}));
             return { error: err.error || `Failed to create: ${input.path}` };
           }
+          loadFileTree();
           loadGitStatus();
           return { status: 'created' };
         }
         case 'delete_file': {
-          const r = await fetch(`${baseUrl}/editor/api/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repo })
+          const r = await fetch(`${baseUrl}/api/editor/files/${encodeURIComponent(input.path)}?repo=${repo}`, {
+            method: 'DELETE'
           });
           if (!r.ok) return { error: `Failed to delete: ${input.path}` };
+          loadFileTree();
           loadGitStatus();
           return { status: 'deleted' };
         }
@@ -711,10 +761,28 @@
             body: JSON.stringify({ message: input.message })
           });
           if (!r.ok) return { error: 'Commit failed' };
+          const commitResult = await r.json();
           pullAndRefresh();
           loadRecentCommits();
-          setTimeout(loadBuildLogs, 2000);
-          return await r.json();
+          // Wait for async build/reload, then collect all logs since the commit
+          const commitTime = new Date().toISOString();
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          loadBuildLogs();
+          try {
+            const allLogs = [];
+            for (const key of [repoName, `${repoName}@dev`]) {
+              const logsResp = await fetch(`/api/builder/${ns}/${key}/logs?limit=20`);
+              if (logsResp.ok) {
+                const logs = await logsResp.json();
+                const recent = logs.filter(e => e.timestamp >= commitTime);
+                allLogs.push(...recent.map(e => `[${e.level}] [${e.event}] ${e.message}`));
+              }
+            }
+            if (allLogs.length > 0) {
+              commitResult.build_logs = allLogs;
+            }
+          } catch (e) {}
+          return commitResult;
         }
         case 'play_command': {
           const r = await fetch(`${baseUrl}/play/command`, {
@@ -729,8 +797,13 @@
           const params = new URLSearchParams();
           if (input.limit) params.set('limit', input.limit);
           if (input.level) params.set('level', input.level);
-          const r = await fetch(`/builder/${ns}/${repoName}/api/logs?${params}`);
-          return await r.json();
+          const allLogs = [];
+          for (const key of [repoName, `${repoName}@dev`]) {
+            const r = await fetch(`/api/builder/${ns}/${key}/logs?${params}`);
+            if (r.ok) allLogs.push(...(await r.json()));
+          }
+          allLogs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+          return allLogs;
         }
         default:
           return { error: `Unknown tool: ${name}` };
@@ -962,8 +1035,8 @@ You can test your changes in-game using play_command.
 
       let fileList = null;
       try {
-        fileList = await fetch(`/editor/api/files?repo=${repo}`).then(r => r.json());
-        prompt += `\n## Files in workspace\n${fileList.files.map(f => `- ${f.path} (${f.size} bytes)`).join('\n')}\n`;
+        fileList = await fetch(`/api/editor/files?repo=${repo}`).then(r => r.json());
+        prompt += `\n## Files in workspace\n${fileList.files.map(f => `- ${f}`).join('\n')}\n`;
       } catch (e) {}
 
       if (currentFile) {
@@ -971,9 +1044,9 @@ You can test your changes in-game using play_command.
       }
 
       // Load agents.md (platform API reference) if it exists
-      if (fileList && fileList.files.some(f => f.path === 'agents.md')) {
+      if (fileList && fileList.files.some(f => f === 'agents.md')) {
         try {
-          const agentsData = await fetch(`/editor/api/files/${encodeURIComponent('agents.md')}?repo=${repo}`).then(r => r.json());
+          const agentsData = await fetch(`/api/editor/files/${encodeURIComponent('agents.md')}?repo=${repo}`).then(r => r.json());
           prompt += `\n## Platform API Reference\n${agentsData.content}\n`;
         } catch (e) {}
       }
@@ -985,11 +1058,11 @@ You can test your changes in-game using play_command.
       }
 
       if (fileList) {
-        const skillFiles = fileList.files.filter(f => f.path.startsWith('.skills/') && f.path.endsWith('.md'));
+        const skillFiles = fileList.files.filter(f => f.startsWith('.skills/') && f.endsWith('.md'));
         for (const sf of skillFiles) {
           try {
-            const data = await fetch(`/editor/api/files/${encodeURIComponent(sf.path)}?repo=${repo}`).then(r => r.json());
-            prompt += `\n## Builder Skill: ${sf.path}\n${data.content}\n`;
+            const data = await fetch(`/api/editor/files/${encodeURIComponent(sf)}?repo=${repo}`).then(r => r.json());
+            prompt += `\n## Builder Skill: ${sf}\n${data.content}\n`;
           } catch (e) {}
         }
       }
@@ -1019,15 +1092,81 @@ You can test your changes in-game using play_command.
 
     function selectProviderTab(provider) {
       selectedProvider = provider;
-      document.querySelectorAll('.provider-tab').forEach(t => t.classList.remove('active'));
-      document.querySelector(`.provider-tab[onclick*="${provider}"]`).classList.add('active');
-      const placeholders = {
-        anthropic: 'sk-ant-...',
-        openai: 'sk-...',
-        gemini: 'AI...'
-      };
+      document.querySelectorAll('#ai-provider-list .provider-name').forEach(n => n.classList.remove('active'));
+      const row = document.querySelector(`.provider-name[data-provider="${provider}"]`);
+      if (row) row.classList.add('active');
+      const placeholders = { anthropic: 'sk-ant-...', openai: 'sk-...', gemini: 'AI...' };
       document.getElementById('ai-key-input').placeholder = placeholders[provider] || 'API key...';
       document.getElementById('ai-key-input').value = '';
+    }
+
+    async function toggleProvider(provider, enabled) {
+      try {
+        await fetch(`${AI_BASE_URL}/api/ai/provider/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ provider, enabled })
+        });
+        loadModels();
+      } catch (e) {
+        console.error('Toggle failed:', e);
+      }
+    }
+
+    function showAddCustomForm() {
+      document.getElementById('custom-provider-form').classList.remove('hidden');
+      document.getElementById('cp-name').value = '';
+      document.getElementById('cp-url').value = '';
+      document.getElementById('cp-key').value = '';
+      document.getElementById('cp-status').textContent = '';
+    }
+
+    function hideAddCustomForm() {
+      document.getElementById('custom-provider-form').classList.add('hidden');
+    }
+
+    async function saveCustomProvider() {
+      const name = document.getElementById('cp-name').value.trim();
+      const url = document.getElementById('cp-url').value.trim();
+      const mode = document.getElementById('cp-mode').value;
+      const key = document.getElementById('cp-key').value.trim();
+      const statusEl = document.getElementById('cp-status');
+      if (!name || !url) { statusEl.textContent = 'Name and URL required'; statusEl.style.color = '#f48771'; return; }
+      statusEl.textContent = 'Saving...'; statusEl.style.color = '#808080';
+      try {
+        const r = await fetch(`${AI_BASE_URL}/api/ai/custom-provider`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ name, base_url: url, api_mode: mode, api_key: key || '' })
+        });
+        if (r.ok) {
+          hideAddCustomForm();
+          checkApiKeyAndShow();
+        } else {
+          const err = await r.json().catch(() => ({}));
+          statusEl.textContent = err.error || 'Failed'; statusEl.style.color = '#f48771';
+        }
+      } catch (e) { statusEl.textContent = e.message; statusEl.style.color = '#f48771'; }
+    }
+
+    async function toggleCustomProvider(id, enabled) {
+      await fetch(`${AI_BASE_URL}/api/ai/custom-provider/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ enabled })
+      });
+      loadModels();
+    }
+
+    async function deleteCustomProvider(id) {
+      if (!confirm('Delete this custom provider?')) return;
+      await fetch(`${AI_BASE_URL}/api/ai/custom-provider/${id}`, {
+        method: 'DELETE', credentials: 'include'
+      });
+      checkApiKeyAndShow();
     }
 
     function toggleAiDock() {
@@ -1067,29 +1206,52 @@ You can test your changes in-game using play_command.
           return;
         }
         const data = await r.json();
-        const hasAnyKey = data.providers
-          ? Object.values(data.providers).some(v => v)
-          : data.exists;
+        let hasAnyEnabled = false;
 
-        // Mark configured tabs (multi-provider)
+        // Render built-in provider rows with toggles
+        const listEl = document.getElementById('ai-provider-list');
+        listEl.innerHTML = '';
         if (data.providers) {
-          document.querySelectorAll('.provider-tab').forEach(tab => {
-            const label = tab.textContent.trim().toLowerCase();
-            const providerKey = label === 'openai' ? 'openai' : label;
-            if (data.providers[providerKey]) {
-              tab.classList.add('configured');
-            } else {
-              tab.classList.remove('configured');
-            }
-          });
+          const names = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' };
+          for (const [key, status] of Object.entries(data.providers)) {
+            const row = document.createElement('div');
+            row.className = 'provider-row';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'provider-name' + (key === selectedProvider ? ' active' : '');
+            nameSpan.dataset.provider = key;
+            nameSpan.textContent = (names[key] || key) + (status.configured ? ' \u2713' : '');
+            nameSpan.onclick = () => selectProviderTab(key);
+            const toggle = document.createElement('label');
+            toggle.className = 'toggle-switch';
+            toggle.innerHTML = `<input type="checkbox" ${status.enabled ? 'checked' : ''} ${!status.configured ? 'disabled' : ''} onchange="toggleProvider('${key}', this.checked)"><span class="slider"></span>`;
+            row.appendChild(nameSpan);
+            row.appendChild(toggle);
+            listEl.appendChild(row);
+            if (status.enabled) hasAnyEnabled = true;
+          }
         }
 
-        if (hasAnyKey) {
+        // Render custom providers
+        const cpList = document.getElementById('custom-provider-list');
+        cpList.innerHTML = '';
+        if (data.custom && data.custom.length > 0) {
+          for (const cp of data.custom) {
+            const item = document.createElement('div');
+            item.className = 'custom-provider-item';
+            item.innerHTML = `<span class="cp-name">${cp.name}</span><span class="cp-mode">${cp.api_mode}</span><label class="toggle-switch"><input type="checkbox" ${cp.enabled ? 'checked' : ''} onchange="toggleCustomProvider(${cp.id}, this.checked)"><span class="slider"></span></label><button class="cp-btn" onclick="deleteCustomProvider(${cp.id})">\u2715</button>`;
+            cpList.appendChild(item);
+            if (cp.enabled) hasAnyEnabled = true;
+          }
+        }
+        // Hide "Add" if at limit
+        const addBtn = document.getElementById('add-custom-btn');
+        if (addBtn) addBtn.style.display = (data.custom && data.custom.length >= 5) ? 'none' : '';
+
+        if (hasAnyEnabled) {
           document.getElementById('ai-chat-area').classList.remove('hidden');
           document.getElementById('ai-chat-area').style.display = 'flex';
           loadModels();
         }
-        // Always show setup so user can add more keys
         document.getElementById('ai-setup').classList.remove('hidden');
       } catch (e) {
         document.getElementById('ai-setup').classList.remove('hidden');
@@ -1131,12 +1293,18 @@ You can test your changes in-game using play_command.
         if (!r.ok) return;
         const data = await r.json();
         const select = document.getElementById('ai-model-select');
+        const prevValue = select.value;
         select.innerHTML = '';
         const providers = data.providers || data;
         for (const [provider, models] of Object.entries(providers)) {
           if (!models || models.length === 0) continue;
           const group = document.createElement('optgroup');
-          group.label = provider.charAt(0).toUpperCase() + provider.slice(1);
+          // Custom providers: "custom:1" -> use the model name as group label
+          if (provider.startsWith('custom:')) {
+            group.label = models[0]?.name || provider;
+          } else {
+            group.label = provider.charAt(0).toUpperCase() + provider.slice(1);
+          }
           for (const m of models) {
             const opt = document.createElement('option');
             opt.value = JSON.stringify({ provider, model: m.id });
@@ -1145,10 +1313,16 @@ You can test your changes in-game using play_command.
           }
           select.appendChild(group);
         }
-        if (select.options.length > 0) {
-          select.selectedIndex = 0;
-          updateSelectedModel();
+        // Restore previous selection if still available
+        if (prevValue) {
+          for (const opt of select.options) {
+            if (opt.value === prevValue) { select.value = prevValue; break; }
+          }
         }
+        if (select.options.length > 0 && !select.value) {
+          select.selectedIndex = 0;
+        }
+        updateSelectedModel();
       } catch (e) {
         console.error('Failed to load models:', e);
       }
@@ -1209,7 +1383,7 @@ You can test your changes in-game using play_command.
 
       try {
         const { repo } = getRepoParts();
-        const files = await fetch(`/editor/api/files?repo=${repo}`).then(r => r.json());
+        const files = await fetch(`/api/editor/files?repo=${repo}`).then(r => r.json());
         const skillFiles = files.files.filter(f => f.path.startsWith('.skills/') && f.path.endsWith('.md'));
         for (const sf of skillFiles) {
           const name = sf.path.replace('.skills/', '').replace('.md', '');

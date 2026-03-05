@@ -4,6 +4,7 @@ members = [
     "crates/mud-core",
     "crates/mud-driver",
     "crates/mud-mop",
+    "crates/mud-e2e",
 ]
 
 [workspace.dependencies]
@@ -25,6 +26,7 @@ base64 = "0.22"
 bcrypt = "0.16"
 hex = "0.4"
 git2 = "0.19"
+openssl = { version = "0.10", features = ["vendored"] }
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header", "cookie"] }
 tower = "0.5"

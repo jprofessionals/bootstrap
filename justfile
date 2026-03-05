@@ -171,12 +171,12 @@ clean:
 
 # ─── Testing ─────────────────────────────────────────────────────────
 
-# Run all tests (Rust + Ruby)
-test: test-rust test-ruby
+# Run all tests (Rust + Ruby + E2E)
+test: test-rust test-ruby test-e2e
 
-# Run Rust tests
+# Run Rust tests (excludes E2E which needs Docker image build)
 test-rust:
-    cargo test --workspace
+    cargo test --workspace --exclude mud-e2e
 
 # Run tests for a specific crate
 test-crate crate:
@@ -190,13 +190,9 @@ test-one name:
 test-verbose:
     cargo test --workspace -- --nocapture
 
-# Run only the ignored tests (e.g., Ruby adapter E2E)
-test-ignored:
-    cargo test --workspace -- --ignored
-
-# Run the portal E2E test (requires Docker + Ruby)
-test-portal:
-    cargo test -p mud-driver --test portal_e2e_test -- --ignored --nocapture
+# Run E2E tests (requires Docker — builds image via harness, cached by Docker layers)
+test-e2e:
+    cargo test -p mud-e2e -- --nocapture
 
 # Run tests that need PostgreSQL (starts DB first)
 test-db: db-start

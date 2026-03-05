@@ -15,6 +15,7 @@ use axum::{
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 
+use crate::persistence::ai_key_store::{CustomProvider, ProviderStatus};
 use crate::web::ai_providers::{self, AiProvider, StreamRequest};
 use crate::web::server::AppState;
 use crate::web::session::BuilderUser;
@@ -32,6 +33,16 @@ pub fn ai_routes() -> Router<AppState> {
         .route("/apikey", post(store_apikey_handler))
         .route("/apikey", get(check_apikey_handler))
         .route("/apikey", delete(delete_apikey_handler))
+        .route("/provider/toggle", post(toggle_provider_handler))
+        .route("/custom-provider", post(create_custom_provider_handler))
+        .route(
+            "/custom-provider/{id}",
+            delete(delete_custom_provider_handler),
+        )
+        .route(
+            "/custom-provider/{id}",
+            post(update_custom_provider_handler),
+        )
         .route("/preferences", get(get_preferences_handler))
         .route("/preferences", post(set_preferences_handler))
         .route("/models", get(list_models_handler))
@@ -67,12 +78,42 @@ struct StatusResponse {
 
 #[derive(Debug, Serialize)]
 struct ApiKeyStatusResponse {
-    providers: HashMap<String, bool>,
+    providers: HashMap<String, ProviderStatus>,
+    custom: Vec<CustomProvider>,
 }
 
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToggleProviderRequest {
+    provider: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCustomProviderRequest {
+    name: String,
+    base_url: String,
+    api_mode: String,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCustomProviderRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    api_mode: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,43 +171,124 @@ async fn stream_handler(
         }
     };
 
-    // Get the provider adapter
-    let provider = match ai_providers::get_provider(&provider_name) {
-        Some(p) => p,
-        None => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!("Unknown provider: {}", provider_name),
-            );
-        }
-    };
+    // Check if this is a custom provider request (provider name starts with "custom:")
+    let is_custom = provider_name.starts_with("custom:");
+    let (provider, api_key, base_url_override): (Box<dyn AiProvider>, String, Option<String>) =
+        if is_custom {
+            // Parse custom provider ID from "custom:<id>"
+            let custom_id: i32 = match provider_name.strip_prefix("custom:").and_then(|s| s.parse().ok()) {
+                Some(id) => id,
+                None => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid custom provider format, expected custom:<id>",
+                    );
+                }
+            };
 
-    // Look up the builder's API key for this provider
-    let api_key = match ai_key_store
-        .get_ai_api_key(&user.player_id, &provider_name)
-        .await
-    {
-        Ok(Some(key)) => key,
-        Ok(None) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!("No API key configured for provider: {}", provider_name),
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to retrieve AI API key");
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to retrieve API key",
-            );
-        }
-    };
+            match ai_key_store
+                .get_custom_provider_key(&user.player_id, custom_id)
+                .await
+            {
+                Ok(Some((base_url, api_mode, key))) => {
+                    // Map api_mode to a built-in provider adapter
+                    let adapter_name = match api_mode.as_str() {
+                        "ollama" | "openai" => "openai",
+                        "anthropic" => "anthropic",
+                        _ => {
+                            return error_response(
+                                StatusCode::BAD_REQUEST,
+                                format!("Unknown api_mode: {}", api_mode),
+                            );
+                        }
+                    };
+                    let provider = ai_providers::get_provider(adapter_name).unwrap();
+                    (provider, key, Some(base_url))
+                }
+                Ok(None) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Custom provider not found or disabled",
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to retrieve custom provider");
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to retrieve custom provider",
+                    );
+                }
+            }
+        } else {
+            // Built-in provider
+            let provider = match ai_providers::get_provider(&provider_name) {
+                Some(p) => p,
+                None => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        format!("Unknown provider: {}", provider_name),
+                    );
+                }
+            };
+
+            // Check enabled flag
+            match ai_key_store
+                .is_provider_enabled(&user.player_id, &provider_name)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        format!("Provider '{}' is not enabled", provider_name),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to check provider status");
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to check provider status",
+                    );
+                }
+            }
+
+            // Look up the builder's API key for this provider
+            let api_key = match ai_key_store
+                .get_ai_api_key(&user.player_id, &provider_name)
+                .await
+            {
+                Ok(Some(key)) => key,
+                Ok(None) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        format!("No API key configured for provider: {}", provider_name),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to retrieve AI API key");
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to retrieve API key",
+                    );
+                }
+            };
+
+            (provider, api_key, None)
+        };
 
     // Build the provider-specific request
     let mut provider_req = provider.build_request(&api_key, &req);
 
-    // Apply base URL override from config (Anthropic only for now)
-    if provider_name == "anthropic" {
+    // Apply base URL override (custom provider or config)
+    if let Some(ref base) = base_url_override {
+        let base = base.trim_end_matches('/');
+        // Determine the correct path suffix based on the provider adapter
+        if provider_req.url.contains("/v1/messages") {
+            provider_req.url = format!("{}/v1/messages", base);
+        } else if provider_req.url.contains("/v1/chat/completions") {
+            provider_req.url = format!("{}/v1/chat/completions", base);
+        }
+    } else if provider_name == "anthropic" {
         if let Some(ref base) = state.anthropic_base_url {
             let base = base.trim_end_matches('/');
             provider_req.url = format!("{}/v1/messages", base);
@@ -404,15 +526,19 @@ async fn check_apikey_handler(
         None => {
             return Json(ApiKeyStatusResponse {
                 providers: HashMap::new(),
+                custom: Vec::new(),
             })
             .into_response();
         }
     };
 
-    let stored_providers = match ai_key_store.list_providers(&user.player_id).await {
-        Ok(providers) => providers,
+    let statuses = match ai_key_store
+        .list_provider_statuses(&user.player_id)
+        .await
+    {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "failed to list AI API key providers");
+            tracing::error!(error = %e, "failed to list AI provider statuses");
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to check API keys",
@@ -420,15 +546,22 @@ async fn check_apikey_handler(
         }
     };
 
-    let mut providers = HashMap::new();
-    for name in &["anthropic", "openai", "gemini"] {
-        providers.insert(
-            name.to_string(),
-            stored_providers.contains(&name.to_string()),
-        );
-    }
+    let custom = match ai_key_store
+        .list_custom_providers(&user.player_id)
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list custom providers");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to list custom providers",
+            );
+        }
+    };
 
-    Json(ApiKeyStatusResponse { providers }).into_response()
+    let providers: HashMap<String, ProviderStatus> = statuses.into_iter().collect();
+    Json(ApiKeyStatusResponse { providers, custom }).into_response()
 }
 
 async fn delete_apikey_handler(
@@ -460,6 +593,161 @@ async fn delete_apikey_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to delete API key",
             )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Toggle & custom provider handlers
+// ---------------------------------------------------------------------------
+
+async fn toggle_provider_handler(
+    user: BuilderUser,
+    State(state): State<AppState>,
+    Json(req): Json<ToggleProviderRequest>,
+) -> Response {
+    let ai_key_store = match &state.ai_key_store {
+        Some(store) => store,
+        None => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI key store not configured",
+            );
+        }
+    };
+
+    match ai_key_store
+        .toggle_provider_enabled(&user.player_id, &req.provider, req.enabled)
+        .await
+    {
+        Ok(()) => Json(StatusResponse {
+            status: "ok".into(),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to toggle provider");
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+    }
+}
+
+async fn create_custom_provider_handler(
+    user: BuilderUser,
+    State(state): State<AppState>,
+    Json(req): Json<CreateCustomProviderRequest>,
+) -> Response {
+    let ai_key_store = match &state.ai_key_store {
+        Some(store) => store,
+        None => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI key store not configured",
+            );
+        }
+    };
+
+    // Validate api_mode
+    if !["ollama", "openai", "anthropic"].contains(&req.api_mode.as_str()) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "api_mode must be 'ollama', 'openai', or 'anthropic'",
+        );
+    }
+
+    let api_key = req.api_key.as_deref().unwrap_or("");
+
+    match ai_key_store
+        .create_custom_provider(
+            &user.player_id,
+            &req.name,
+            &req.base_url,
+            &req.api_mode,
+            api_key,
+        )
+        .await
+    {
+        Ok(provider) => (StatusCode::CREATED, Json(provider)).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to create custom provider");
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+    }
+}
+
+async fn update_custom_provider_handler(
+    user: BuilderUser,
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Json(req): Json<UpdateCustomProviderRequest>,
+) -> Response {
+    let ai_key_store = match &state.ai_key_store {
+        Some(store) => store,
+        None => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI key store not configured",
+            );
+        }
+    };
+
+    if let Some(ref mode) = req.api_mode {
+        if !["ollama", "openai", "anthropic"].contains(&mode.as_str()) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "api_mode must be 'ollama', 'openai', or 'anthropic'",
+            );
+        }
+    }
+
+    match ai_key_store
+        .update_custom_provider(
+            &user.player_id,
+            id,
+            req.name.as_deref(),
+            req.base_url.as_deref(),
+            req.api_mode.as_deref(),
+            req.api_key.as_deref(),
+            req.enabled,
+        )
+        .await
+    {
+        Ok(()) => Json(StatusResponse {
+            status: "ok".into(),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to update custom provider");
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+    }
+}
+
+async fn delete_custom_provider_handler(
+    user: BuilderUser,
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Response {
+    let ai_key_store = match &state.ai_key_store {
+        Some(store) => store,
+        None => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI key store not configured",
+            );
+        }
+    };
+
+    match ai_key_store
+        .delete_custom_provider(&user.player_id, id)
+        .await
+    {
+        Ok(()) => Json(StatusResponse {
+            status: "ok".into(),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to delete custom provider");
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
         }
     }
 }
@@ -513,8 +801,10 @@ async fn set_preferences_handler(
         }
     };
 
-    // Validate that the provider is known
-    if ai_providers::get_provider(&req.default_provider).is_none() {
+    // Validate that the provider is known (built-in or custom:N)
+    if !req.default_provider.starts_with("custom:")
+        && ai_providers::get_provider(&req.default_provider).is_none()
+    {
         return error_response(
             StatusCode::BAD_REQUEST,
             format!("Unknown provider: {}", req.default_provider),
@@ -547,12 +837,51 @@ async fn set_preferences_handler(
 // Models handler
 // ---------------------------------------------------------------------------
 
-async fn list_models_handler() -> Response {
+async fn list_models_handler(
+    user: BuilderUser,
+    State(state): State<AppState>,
+) -> Response {
     let mut providers = HashMap::new();
 
-    for name in &["anthropic", "openai", "gemini"] {
-        if let Some(provider) = ai_providers::get_provider(name) {
-            providers.insert(name.to_string(), provider.models());
+    // Only list models for enabled built-in providers
+    if let Some(ref ai_key_store) = state.ai_key_store {
+        if let Ok(statuses) = ai_key_store
+            .list_provider_statuses(&user.player_id)
+            .await
+        {
+            for (name, status) in &statuses {
+                if status.enabled {
+                    if let Some(provider) = ai_providers::get_provider(name) {
+                        providers.insert(name.clone(), provider.models());
+                    }
+                }
+            }
+        }
+
+        // Include custom provider models
+        if let Ok(custom_providers) = ai_key_store
+            .list_custom_providers(&user.player_id)
+            .await
+        {
+            for cp in &custom_providers {
+                if cp.enabled {
+                    let key = format!("custom:{}", cp.id);
+                    // For custom providers, return a placeholder list.
+                    // The frontend can fetch actual models from the endpoint if needed.
+                    let models = vec![ai_providers::ModelInfo {
+                        id: format!("custom:{}", cp.id),
+                        name: cp.name.clone(),
+                    }];
+                    providers.insert(key, models);
+                }
+            }
+        }
+    } else {
+        // No key store — show all built-in models (backwards compat)
+        for name in &["anthropic", "openai", "gemini"] {
+            if let Some(provider) = ai_providers::get_provider(name) {
+                providers.insert(name.to_string(), provider.models());
+            }
         }
     }
 

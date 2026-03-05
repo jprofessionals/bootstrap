@@ -23,7 +23,7 @@ This document describes the MUD driver platform APIs available to code in this a
 ├── daemons/             # Daemon subclasses
 ├── db/
 │   └── migrations/      # Sequel migrations (run on load and reload)
-└── web/                 # Web assets (ERB templates or SPA source)
+└── web/                 # Web assets (Tera templates or SPA source)
 ```
 
 Files are auto-loaded by the driver based on `mud_loader.rb`. Each `.rb` file in a mapped directory must define exactly one class whose name matches the filename (snake_case to PascalCase). Pushing to the git remote triggers a hot reload.
@@ -206,13 +206,13 @@ end
 
 ## Web Modes
 
-Each area can serve web content at `/builder/{{area_name}}/`. The mode is set in `mud_web.rb`.
+Each area can serve web content at `/project/{{namespace}}/{{area_name}}/`. The mode is set in `mud_web.rb`. Web content is built and served directly by the Rust driver.
 
-### ERB Mode (default)
+### Tera Template Mode (default)
 
-Serves ERB templates from `web/`. Template locals are supplied via `web_data`.
+Serves Tera templates from `web/templates/`. Template variables are supplied via the `web_data` block in `mud_web.rb` (the driver requests this data from the adapter via MOP).
 
-**URL:** `http://<host>:<port>/builder/{{area_name}}/`
+**URL:** `http://<host>:<port>/project/{{namespace}}/{{area_name}}/`
 
 **`mud_web.rb` example:**
 
@@ -234,13 +234,13 @@ end
 | `area` | The Area object (`.rooms`, `.items`, `.npcs`, `.daemons`, `.path`) |
 | `helpers` | Web helpers (`.server_name`, `.total_players_online`) |
 
-The returned Hash becomes template locals in your ERB files.
+The returned Hash becomes template variables in your Tera files. Place templates in `web/templates/` (e.g., `web/templates/index.html`). Tera uses `{{ variable }}` syntax for interpolation, `{% if %}` / `{% for %}` for control flow.
 
 ### SPA Mode
 
-Serves a single-page application built with Vite. The driver runs `npm install` and `vite build` automatically on area load.
+Serves a single-page application built with Vite. The driver's `BuildManager` runs `npm install` and `vite build` automatically, triggered by git push (SSH or HTTP) and workspace commits.
 
-**Page URL:** `http://<host>:<port>/builder/{{namespace}}/{{area_name}}/`
+**Page URL:** `http://<host>:<port>/project/{{namespace}}/{{area_name}}/`
 
 **`mud_web.rb` example:**
 
@@ -254,11 +254,11 @@ SPA source files go in `web/src/` (includes `index.html`, `main.js`, `vite.confi
 
 The driver copies `web/src/` into a build directory, runs `npm install` and `vite build` with the correct base URL. This means:
 
-- Asset paths are handled automatically — the platform sets `--base /builder/{{namespace}}/{{area_name}}/` so all built assets resolve correctly
+- Asset paths are handled automatically — the platform sets `--base /project/{{namespace}}/{{area_name}}/` so all built assets resolve correctly
 - In `index.html`, use relative paths: `src="./main.js"` (Vite rewrites these during build)
 - The `MUD_BASE_URL` environment variable is available in `vite.config.js` for custom builds
 - Any npm dependencies must be listed in `package.json`
-- The build runs once on first request after area load; a git push triggers a rebuild
+- Builds are triggered by git push (SSH/HTTP) and workspace commits — not on first request
 
 **API calls from JavaScript:**
 
@@ -274,7 +274,7 @@ The `mud` helper methods:
 
 | Method | Description |
 |--------|-------------|
-| `mud.baseUrl` | The area's mount path (e.g., `/builder/ns/area/`) |
+| `mud.baseUrl` | The area's mount path (e.g., `/project/ns/area/`) |
 | `mud.fetch(path, options)` | Like `fetch()` but resolves `path` against `baseUrl`. Throws on non-OK responses. |
 | `mud.getJson(path)` | GET request, returns parsed JSON |
 | `mud.postJson(path, body)` | POST with JSON body, returns parsed JSON |
@@ -291,24 +291,58 @@ All non-file paths serve `index.html` (catch-all for client-side routing). Pass 
 <BrowserRouter basename={window.__MUD__?.baseUrl}>
 ```
 
-Deep links like `/builder/{{namespace}}/{{area_name}}/settings/profile` work out of the box. The SPA fallback only applies after the `web_app` Rack handler (if defined) returns 404.
+Deep links like `/project/{{namespace}}/{{area_name}}/settings/profile` work out of the box. The SPA fallback only applies after the `web_app` Rack handler (if defined) returns 404.
 
 ### Rack App Mode
 
-Mount a full Rack-compatible app for your backend. The `web_app` block receives `work_path` (the area directory) and must return a Rack app — any object responding to `call(env)`.
+Mount a Rack-compatible app for your backend. The recommended approach is to subclass `MUD::Stdlib::Web::RackApp` (a Roda subclass) directly in `mud_web.rb`. The platform auto-detects the subclass and wires it up — no `web_app` block needed.
 
-**In SPA mode:** Only `/api/*` requests are forwarded to the Rack app. All other paths are served by the SPA frontend (JS). This means the SPA owns all non-API routes — you don't need to handle the fall-through yourself.
+**In SPA mode:** Only `/api/*` requests are forwarded to the Rack app. All other paths are served by the driver's SPA frontend (JS). This means the SPA owns all non-API routes — you don't need to handle the fall-through yourself.
 
-**In ERB mode:** All requests hit the Rack app first. If it returns a 404 status, the request falls through to ERB template serving.
+**In Tera template mode:** All requests hit the Rack app first. If it returns a 404 status, the request falls through to Tera template rendering.
 
-**`mud_web.rb` example (API + SPA):**
+**`mud_web.rb` example (RackApp subclass — recommended):**
+
+```ruby
+web_mode :spa
+
+class TodoApi < MUD::Stdlib::Web::RackApp
+  route do |r|
+    r.on "api/todos" do
+      todos = area_db[:todos]
+
+      r.get true do
+        todos.order(:id).all
+      end
+
+      r.post true do
+        body = JSON.parse(r.body.read) rescue {}
+        text = body['text']&.strip
+        r.halt(400, { error: 'Text required' }.to_json) unless text && !text.empty?
+        id = todos.insert(text: text, completed: false)
+        todos.where(id: id).first
+      end
+    end
+  end
+end
+```
+
+**RackApp features:**
+
+| Method | Description |
+|--------|-------------|
+| `area_db` | Returns the area's Sequel database (auto-wired by the platform) |
+| `route` block | Standard Roda routing — return a Hash to auto-serialize as JSON |
+| Roda plugins | `json` and `all_verbs` are pre-loaded |
+
+**Alternative: raw `web_app` block:**
+
+You can also use a `web_app` block that returns any Rack-callable object (lambda, Sinatra app, etc.):
 
 ```ruby
 web_mode :spa
 
 web_app do |work_path|
-  require 'json'
-
   db = MUD::Container["database.{{namespace}}/{{area_name}}"]
   todos = db[:todos]
 
@@ -335,17 +369,15 @@ end
 
 **Key points:**
 
-- The block runs once on first request; the returned app is cached and reused.
-- Use `work_path` to `require` area code (items, daemons, etc.).
-- You can use any Rack framework (Roda, Sinatra, raw lambda, etc.).
-- `PATH_INFO` is relative to the area mount point — `/api/todos`, not `/builder/ns/area/api/todos`.
+- The app is cached and reused after first request; rebuilt on area hot-reload (git push).
+- `PATH_INFO` starts with `/api/` — e.g. `/api/todos`, not `/project/ns/area/api/todos`.
 - In SPA mode, only `/api/*` routes reach the Rack app; the SPA serves everything else.
-- In ERB mode, return `[404, {}, []]` from unmatched routes to fall through to ERB.
-- The app is rebuilt on area hot-reload (git push).
+- In Tera template mode, return 404 from unmatched routes to fall through to template rendering.
+- Errors in the Rack app are caught, logged to the build log, and returned as 500 JSON responses. The cached app is invalidated on error so the next request re-evaluates.
 
-### web_routes (legacy)
+### web_routes
 
-The simpler `web_routes` block is still supported for backward compatibility. It receives a Roda request object, the area, and the session. Return a Hash to auto-serialize as JSON.
+The simpler `web_routes` block provides a concise way to define area API routes. It receives a Roda request object, the area, and the session. Return a Hash to auto-serialize as JSON. Routes are served by the Ruby adapter.
 
 ```ruby
 web_routes do |r, area, session|
@@ -414,12 +446,13 @@ The driver captures detailed logs during area load and reload. These are stored 
 | `migration` | Database migration result (success count or error) |
 | `spa_build` | npm/vite build output (stdout/stderr captured) |
 | `reload_end` | Summary: success or error count |
+| `web_app` | 5xx error from Rack app / web_routes (logged by proxy) |
 
 **Viewing logs:**
 
 - **Builder UI:** Click the "Logs" tab in the editor to see recent reload history with color-coded entries and expandable backtraces
 - **AI assistant:** The AI can call its `view_build_logs` tool to diagnose load failures
-- **REST API:** `GET /builder/{{namespace}}/{{area_name}}/api/logs?limit=50&level=all`
+- **REST API:** `GET /api/builder/{{namespace}}/{{area_name}}/logs?limit=50&level=all`
   - `limit` — max entries (default 50, max 200)
   - `level` — filter: `all`, `error`, `warn` (default: all)
 - **File:** Read `.mud/reload.log` directly (one JSON object per line)
@@ -485,7 +518,6 @@ These gems are loaded by the driver and available to area code:
 | `dry-schema` | Schema validation |
 | `async` | Fiber-based concurrency |
 | `bcrypt` | Password hashing |
-| `erb` | Template rendering |
 | `json` | JSON parsing (stdlib) |
 | `yaml` | YAML parsing (stdlib) |
 

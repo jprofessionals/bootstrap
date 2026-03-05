@@ -1,0 +1,11 @@
+# Only send what Dockerfile.e2e needs to Docker daemon
+target/
+!target/x86_64-unknown-linux-musl/release/mud-driver
+crates/
+docs/
+data/
+world/
+git-server/
+.git/
+.claude/
+adapters/ruby/vendor/

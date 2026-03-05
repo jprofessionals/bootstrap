@@ -39,6 +39,11 @@ impl Workspace {
         }
     }
 
+    /// The base world directory path.
+    pub fn world_path(&self) -> &Path {
+        &self.world_path
+    }
+
     /// Production working directory path: `world/<ns>/<name>/`
     pub fn workspace_path(&self, ns: &str, name: &str) -> PathBuf {
         self.world_path.join(ns).join(name)
@@ -243,6 +248,47 @@ impl Workspace {
         let main_ref = repo.find_reference("refs/heads/main")?;
         let commit = main_ref.peel_to_commit()?;
         repo.branch(branch_name, &commit, false)?;
+        Ok(())
+    }
+
+    /// Switch the @dev working directory to track a different branch.
+    /// Fetches the branch from origin, then checks it out (creating a local
+    /// tracking branch if needed) and hard-resets to the remote head.
+    pub fn checkout_branch(&self, ns: &str, name: &str, branch: &str) -> Result<()> {
+        let dev_path = self.dev_path(ns, name);
+        let repo = git2::Repository::open(&dev_path)
+            .with_context(|| format!("opening dev repo at {}", dev_path.display()))?;
+
+        // Fetch the branch from origin
+        let mut remote = repo.find_remote("origin")?;
+        remote.fetch(&[branch], None, None)?;
+
+        let remote_ref_name = format!("refs/remotes/origin/{}", branch);
+        let remote_ref = repo
+            .find_reference(&remote_ref_name)
+            .with_context(|| format!("branch '{}' not found in remote", branch))?;
+        let target_commit = remote_ref.peel_to_commit()?;
+
+        // Check if local branch exists
+        match repo.find_branch(branch, git2::BranchType::Local) {
+            Ok(mut local_branch) => {
+                // Update existing local branch to point at remote head
+                local_branch.get_mut().set_target(
+                    target_commit.id(),
+                    &format!("checkout_branch: update {} to origin/{}", branch, branch),
+                )?;
+            }
+            Err(_) => {
+                // Create local tracking branch
+                repo.branch(branch, &target_commit, false)?;
+            }
+        }
+
+        // Checkout the branch
+        let obj = target_commit.as_object();
+        repo.checkout_tree(obj, Some(git2::build::CheckoutBuilder::new().force()))?;
+        repo.set_head(&format!("refs/heads/{}", branch))?;
+
         Ok(())
     }
 
@@ -497,6 +543,37 @@ mod tests {
         let prod = ws.checkout("ns", "area").unwrap();
         assert!(prod.exists());
         assert!(prod.join("rooms/entrance.rb").exists());
+    }
+
+    #[test]
+    fn test_checkout_branch() {
+        let (_dir, mgr, ws) = setup();
+
+        mgr.create_repo("testns", "village", true, None).unwrap();
+        ws.checkout("testns", "village").unwrap();
+
+        // Create a feature branch in the bare repo
+        ws.create_branch("testns", "village", "feature_x").unwrap();
+
+        // Switch @dev to the feature branch
+        ws.checkout_branch("testns", "village", "feature_x")
+            .unwrap();
+
+        // Verify the @dev repo is now on the feature branch
+        let dev_path = ws.dev_path("testns", "village");
+        let repo = git2::Repository::open(&dev_path).unwrap();
+        let head = repo.head().unwrap();
+        assert_eq!(
+            head.shorthand().unwrap(),
+            "feature_x",
+            "dev should be on feature_x branch"
+        );
+
+        // Switch back to develop
+        ws.checkout_branch("testns", "village", "develop").unwrap();
+        let repo = git2::Repository::open(&dev_path).unwrap();
+        let head = repo.head().unwrap();
+        assert_eq!(head.shorthand().unwrap(), "develop");
     }
 
     #[test]

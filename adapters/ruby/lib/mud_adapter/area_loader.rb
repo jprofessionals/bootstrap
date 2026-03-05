@@ -48,8 +48,6 @@ module MudAdapter
           @logger.log(key, :info, :reload_end, "Loaded successfully")
         end
 
-        build_spa_if_needed(key, path)
-
         @client.send_message(
           "type" => "area_loaded",
           "area_id" => area_id
@@ -96,8 +94,6 @@ module MudAdapter
         else
           @logger.log(key, :info, :reload_end, "Reloaded successfully")
         end
-
-        build_spa_if_needed(key, path)
 
         @client.send_message(
           "type" => "area_loaded",
@@ -222,78 +218,6 @@ module MudAdapter
     rescue StandardError => e
       bt = e.backtrace&.first(10)&.join("\n")
       @logger.log(area_key, :error, :migration, "#{e.class}: #{e.message}", backtrace: bt)
-    end
-
-    # Build the SPA if the area uses web_mode :spa.
-    # Runs npm install + vite build eagerly so the first web request is fast.
-    # Builds both the main area and the @dev branch checkout if it exists.
-    def build_spa_if_needed(area_key, path)
-      mud_web_path = File.join(path, 'mud_web.rb')
-      return unless File.exist?(mud_web_path)
-
-      config = MudAdapter::Stdlib::World::WebDataDSL.evaluate(mud_web_path)
-      return unless config&.spa_mode?
-
-      # Build main area
-      run_spa_build_for(area_key, path)
-
-      # Also build @dev checkout if it exists
-      dev_path = "#{path}@dev"
-      if Dir.exist?(dev_path)
-        dev_key = "#{area_key}@dev"
-        run_spa_build_for(dev_key, dev_path)
-      end
-    end
-
-    def run_spa_build_for(area_key, path)
-      require 'open3'
-
-      src_dir = File.join(path, 'web', 'src')
-      return unless Dir.exist?(src_dir) && File.exist?(File.join(src_dir, 'package.json'))
-
-      build_dir = File.join('/tmp', 'mud-builder-cache', area_key.tr('/', '-'))
-      FileUtils.rm_rf(build_dir)
-      FileUtils.mkdir_p(build_dir)
-      FileUtils.cp_r(Dir.glob(File.join(src_dir, '{*,.*}'), File::FNM_DOTMATCH)
-                        .reject { |f| %w[. ..].include?(File.basename(f)) }, build_dir)
-
-      # npm install
-      output, status = Open3.capture2e('npm', 'install', chdir: build_dir)
-      unless status.success?
-        @logger.log(area_key, :error, :spa_build, "npm install failed:\n#{output}")
-        return
-      end
-      @logger.log(area_key, :info, :spa_build, "npm install succeeded")
-
-      # vite build with correct base URL
-      base_url = "/builder/#{area_key}/"
-      output, status = Open3.capture2e(
-        { 'MUD_BASE_URL' => base_url },
-        'npx', 'vite', 'build', '--base', base_url,
-        chdir: build_dir
-      )
-      unless status.success?
-        @logger.log(area_key, :error, :spa_build, "vite build failed:\n#{output}")
-        return
-      end
-      @logger.log(area_key, :info, :spa_build, "vite build succeeded")
-
-      # Inject window.__MUD__
-      index_path = File.join(build_dir, 'dist', 'index.html')
-      if File.exist?(index_path)
-        html = File.read(index_path)
-        mud_script = "<script>window.__MUD__={baseUrl:#{base_url.to_json}};</script>"
-        unless html.include?('window.__MUD__')
-          html = html.sub('<head>', "<head>\n  #{mud_script}")
-          File.write(index_path, html)
-        end
-      end
-
-      # Mark as built so BuilderApp doesn't rebuild
-      MudAdapter::Stdlib::Portal::BuilderApp.spa_builds[area_key] = true
-    rescue StandardError => e
-      bt = e.backtrace&.first(10)&.join("\n")
-      @logger.log(area_key, :error, :spa_build, "#{e.class}: #{e.message}", backtrace: bt)
     end
 
     # Log an info message via the MOP client.

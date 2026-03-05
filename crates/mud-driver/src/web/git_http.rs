@@ -13,6 +13,7 @@ use tokio::process::Command;
 
 use crate::git::repo_manager::{AccessLevel, RepoManager};
 use crate::persistence::player_store::{AuthResult, PlayerStore};
+use crate::web::build_manager::BuildManager;
 use crate::web::server::AppState;
 
 // ---------------------------------------------------------------------------
@@ -567,6 +568,30 @@ async fn run_service(
             "git process exited with non-zero status"
         );
         // Still return the stdout — git clients expect the error payload there.
+    }
+
+    // After a successful receive-pack (push), trigger SPA builds if applicable.
+    // We don't know which branch was pushed, so rebuild both production and @dev.
+    if service_name == "git-receive-pack" && status.success() {
+        if let Some(ref build_manager) = state.build_manager {
+            // Production (main branch)
+            let _ = state.workspace.pull(ns, name, "main");
+            let area_path = state.workspace.workspace_path(ns, name);
+            if BuildManager::is_spa(&area_path) {
+                let base_url = format!("/project/{ns}/{name}/");
+                let area_key = format!("{ns}/{name}");
+                build_manager.trigger_build(area_key, area_path, base_url);
+            }
+
+            // Development (@dev branch)
+            let _ = state.workspace.pull(ns, name, "develop");
+            let dev_path = state.workspace.dev_path(ns, name);
+            if BuildManager::is_spa(&dev_path) {
+                let base_url = format!("/project/{ns}/{name}@dev/");
+                let area_key = format!("{ns}/{name}@dev");
+                build_manager.trigger_build(area_key, dev_path, base_url);
+            }
+        }
     }
 
     let content_type = format!("application/x-{}-result", service_name);

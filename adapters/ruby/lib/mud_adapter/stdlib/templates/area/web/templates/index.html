@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{{ area_name }}</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1 { color: #e94560; }
+    a { color: #0f3460; }
+  </style>
+</head>
+<body>
+  <h1>{{ area_name }}</h1>
+  <p>Rooms: {{ room_count }} | Items: {{ item_count }} | NPCs: {{ npc_count }}</p>
+  <p>Server: {{ server_name }} | Players online: {{ players_online }}</p>
+</body>
+</html>

@@ -135,6 +135,12 @@ module MudAdapter
       when "call"
         handle_call(msg)
 
+      when "check_builder_access"
+        handle_check_builder_access(msg)
+
+      when "get_web_data"
+        handle_get_web_data(msg)
+
       else
         log("Unknown message type: #{type.inspect}")
       end
@@ -202,6 +208,107 @@ module MudAdapter
         "request_id" => msg["request_id"],
         "error" => "Call dispatch not yet implemented"
       )
+    end
+
+    # Handle a check_builder_access request from the driver.
+    #
+    # For now this performs a basic check: verify the user exists and
+    # return allowed: true. Full role/permission checking will be
+    # refined once the role infrastructure is in place.
+    def handle_check_builder_access(msg)
+      request_id = msg["request_id"]
+      user = msg["user"]
+
+      begin
+        # Basic validation — ensure a user was provided
+        unless user && !user.empty?
+          @client.send_message(
+            "type" => "call_result",
+            "request_id" => request_id,
+            "result" => { "allowed" => false, "reason" => "no user specified" }
+          )
+          return
+        end
+
+        # TODO: look up the user in the stdlib player store and check
+        # the builder role and namespace/area access. For now, allow
+        # all authenticated users.
+        @client.send_message(
+          "type" => "call_result",
+          "request_id" => request_id,
+          "result" => { "allowed" => true }
+        )
+      rescue StandardError => e
+        @client.send_message(
+          "type" => "call_error",
+          "request_id" => request_id,
+          "error" => "check_builder_access failed: #{e.class}: #{e.message}"
+        )
+      end
+    end
+
+    # Handle a get_web_data request from the driver.
+    #
+    # Loads the area's mud_web.rb via WebDataDSL, calls the web_data
+    # block, and returns the resulting template variables hash.
+    def handle_get_web_data(msg)
+      request_id = msg["request_id"]
+      area_key = msg["area_key"]
+
+      begin
+        # Look up the area by its key (e.g. "namespace/name")
+        parts = area_key&.split("/", 2)
+        unless parts && parts.length == 2
+          @client.send_message(
+            "type" => "call_result",
+            "request_id" => request_id,
+            "result" => { "data" => {} }
+          )
+          return
+        end
+
+        namespace, name = parts
+        area_id = { "namespace" => namespace, "name" => name }
+        area = @area_loader.get_area(area_id)
+
+        unless area
+          @client.send_message(
+            "type" => "call_result",
+            "request_id" => request_id,
+            "result" => { "data" => {} }
+          )
+          return
+        end
+
+        # Evaluate the mud_web.rb DSL file
+        mud_web_path = File.join(area.path, "mud_web.rb")
+        config = MudAdapter::Stdlib::World::WebDataDSL.evaluate(mud_web_path)
+
+        unless config&.data_block
+          @client.send_message(
+            "type" => "call_result",
+            "request_id" => request_id,
+            "result" => { "data" => {} }
+          )
+          return
+        end
+
+        # Call the web_data block with the area
+        data = config.data_block.call(area) || {}
+
+        @client.send_message(
+          "type" => "call_result",
+          "request_id" => request_id,
+          "result" => { "data" => data }
+        )
+      rescue StandardError => e
+        log("get_web_data error for #{area_key}: #{e.class}: #{e.message}")
+        @client.send_message(
+          "type" => "call_result",
+          "request_id" => request_id,
+          "result" => { "data" => {} }
+        )
+      end
     end
 
     def log(message)

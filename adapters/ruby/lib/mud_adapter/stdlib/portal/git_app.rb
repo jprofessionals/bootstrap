@@ -179,8 +179,14 @@ module MudAdapter
           { status: 'created', branch: branch_name }
         end
 
-        def checkout_branch(_namespace, _name, _branch_name)
-          halt_status(501) # Not yet implemented via MOP
+        def checkout_branch(namespace, name, branch_name)
+          halt_status(400) unless branch_name && !branch_name.empty?
+
+          mop_client&.send_driver_request('workspace_checkout_branch', {
+            namespace: namespace, name: name, branch: branch_name
+          })
+
+          { status: 'ok', branch: branch_name }
         end
 
         def stage_files(_namespace, _name, _files)

@@ -5,8 +5,8 @@
 //! - `POST /:ns/:name.git/git-upload-pack` (fetch)
 //! - `POST /:ns/:name.git/git-receive-pack` (push)
 //!
-//! All tests require Docker (PostgreSQL via testcontainers) and are marked
-//! `#[ignore]`. Run with: `cargo test -p mud-driver --test http_git_test -- --ignored`
+//! All tests require Docker (PostgreSQL via testcontainers).
+//! Run with: `cargo test -p mud-driver --test http_git_test`
 
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ use mud_driver::git::repo_manager::{AccessLevel, RepoManager};
 use mud_driver::git::workspace::Workspace;
 use mud_driver::persistence::player_store::PlayerStore;
 use mud_driver::web::git_http::git_http_routes;
+use mud_driver::web::build_log::BuildLog;
 use mud_driver::web::server::AppState;
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,9 @@ async fn build_harness() -> TestHarness {
         http_client: reqwest::Client::new(),
         portal_socket: "/tmp/mud-portal.sock".into(),
         anthropic_base_url: None,
+        build_manager: None,
+        build_log: Arc::new(BuildLog::new(200)),
+        mop_rpc: None,
     };
 
     let app = Router::new()
@@ -153,7 +157,7 @@ async fn build_harness() -> TestHarness {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_no_auth_returns_401() {
     let h = build_harness().await;
 
@@ -178,7 +182,7 @@ async fn info_refs_no_auth_returns_401() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_wrong_password_returns_401() {
     let h = build_harness().await;
 
@@ -204,7 +208,7 @@ async fn info_refs_wrong_password_returns_401() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_nonexistent_user_returns_401() {
     let h = build_harness().await;
 
@@ -223,7 +227,7 @@ async fn info_refs_nonexistent_user_returns_401() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_valid_owner_returns_200_with_pktline() {
     let h = build_harness().await;
 
@@ -289,7 +293,7 @@ async fn info_refs_valid_owner_returns_200_with_pktline() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_collaborator_read_access_returns_200() {
     let h = build_harness().await;
 
@@ -315,7 +319,7 @@ async fn info_refs_collaborator_read_access_returns_200() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_unauthorized_user_returns_403() {
     let h = build_harness().await;
 
@@ -338,7 +342,7 @@ async fn info_refs_unauthorized_user_returns_403() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_receive_pack_readonly_user_returns_403() {
     let h = build_harness().await;
 
@@ -365,7 +369,7 @@ async fn info_refs_receive_pack_readonly_user_returns_403() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_receive_pack_owner_returns_200() {
     let h = build_harness().await;
 
@@ -395,7 +399,7 @@ async fn info_refs_receive_pack_owner_returns_200() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_invalid_service_returns_400() {
     let h = build_harness().await;
 
@@ -417,7 +421,7 @@ async fn info_refs_invalid_service_returns_400() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn info_refs_nonexistent_repo_returns_404() {
     let h = build_harness().await;
 
@@ -439,7 +443,7 @@ async fn info_refs_nonexistent_repo_returns_404() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore]
+
 async fn upload_pack_no_auth_returns_401() {
     let h = build_harness().await;
 
@@ -458,7 +462,7 @@ async fn upload_pack_no_auth_returns_401() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn upload_pack_valid_auth_returns_200() {
     let h = build_harness().await;
 
@@ -489,7 +493,7 @@ async fn upload_pack_valid_auth_returns_200() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn upload_pack_unauthorized_user_returns_403() {
     let h = build_harness().await;
 
@@ -516,7 +520,7 @@ async fn upload_pack_unauthorized_user_returns_403() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore]
+
 async fn receive_pack_no_auth_returns_401() {
     let h = build_harness().await;
 
@@ -535,7 +539,7 @@ async fn receive_pack_no_auth_returns_401() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn receive_pack_readonly_returns_403() {
     let h = build_harness().await;
 
@@ -562,7 +566,7 @@ async fn receive_pack_readonly_returns_403() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn receive_pack_owner_returns_200() {
     let h = build_harness().await;
 
@@ -593,7 +597,7 @@ async fn receive_pack_owner_returns_200() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn receive_pack_readwrite_collaborator_returns_200() {
     let h = build_harness().await;
 
@@ -624,7 +628,7 @@ async fn receive_pack_readwrite_collaborator_returns_200() {
 // ===========================================================================
 
 #[tokio::test]
-#[ignore]
+
 async fn pat_auth_works_for_info_refs() {
     let h = build_harness().await;
 
@@ -654,7 +658,7 @@ async fn pat_auth_works_for_info_refs() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn pat_auth_wrong_token_returns_401() {
     let h = build_harness().await;
 

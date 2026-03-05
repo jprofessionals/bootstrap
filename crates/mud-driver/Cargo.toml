@@ -24,6 +24,7 @@ hex = { workspace = true }
 russh = "0.57"
 async-trait = { workspace = true }
 git2 = { workspace = true }
+openssl = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tower = { workspace = true }

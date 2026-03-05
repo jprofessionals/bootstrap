@@ -1,3 +1,4 @@
 /target
 /data/
 .worktrees/
+/config/server.yml

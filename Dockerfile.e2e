@@ -1,0 +1,20 @@
+FROM ruby:3.4-bookworm
+RUN apt-get update && apt-get install -y libpq-dev && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY target/x86_64-unknown-linux-musl/release/mud-driver /usr/local/bin/mud-driver
+COPY adapters/ruby/ adapters/ruby/
+
+ENV BUNDLE_GEMFILE=/app/adapters/ruby/Gemfile
+ENV BUNDLE_PATH=/app/adapters/ruby/vendor/bundle
+ENV BUNDLE_WITHOUT=development:test
+
+RUN cd adapters/ruby && bundle install
+
+EXPOSE 8080 2222
+
+ENTRYPOINT ["mud-driver"]
+CMD ["--config", "/app/config.yml"]

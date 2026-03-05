@@ -7,7 +7,7 @@ module MudDev
     def initialize
       @data_block = nil
       @routes_block = nil
-      @mode = :erb
+      @mode = :template
     end
 
     def web_mode(mode)

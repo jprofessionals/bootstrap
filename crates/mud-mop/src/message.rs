@@ -80,6 +80,23 @@ pub enum DriverMessage {
     /// migrations and connect directly for schema management.
     #[serde(rename = "configure")]
     Configure { stdlib_db_url: String },
+
+    /// Ask the adapter to check whether a builder has access to an area.
+    #[serde(rename = "check_builder_access")]
+    CheckBuilderAccess {
+        request_id: u64,
+        user: String,
+        namespace: String,
+        area: String,
+        action: String,
+    },
+
+    /// Ask the adapter to provide web template data for an area.
+    #[serde(rename = "get_web_data")]
+    GetWebData {
+        request_id: u64,
+        area_key: String,
+    },
 }
 
 /// Messages sent from a language adapter back to the driver.
@@ -541,5 +558,60 @@ mod tests {
         let val = Value::String("hello".into());
         let debug = format!("{:?}", val);
         assert!(debug.contains("hello"));
+    }
+
+    #[test]
+    fn test_check_builder_access_serialization() {
+        let msg = DriverMessage::CheckBuilderAccess {
+            request_id: 42,
+            user: "alice".into(),
+            namespace: "game".into(),
+            area: "tavern".into(),
+            action: "write".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
+        let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(msg, decoded);
+
+        // Verify all fields survived the round-trip
+        if let DriverMessage::CheckBuilderAccess {
+            request_id,
+            user,
+            namespace,
+            area,
+            action,
+        } = &decoded
+        {
+            assert_eq!(*request_id, 42);
+            assert_eq!(user, "alice");
+            assert_eq!(namespace, "game");
+            assert_eq!(area, "tavern");
+            assert_eq!(action, "write");
+        } else {
+            panic!("decoded to wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_get_web_data_serialization() {
+        let msg = DriverMessage::GetWebData {
+            request_id: 99,
+            area_key: "game/tavern".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
+        let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(msg, decoded);
+
+        // Verify all fields survived the round-trip
+        if let DriverMessage::GetWebData {
+            request_id,
+            area_key,
+        } = &decoded
+        {
+            assert_eq!(*request_id, 99);
+            assert_eq!(area_key, "game/tavern");
+        } else {
+            panic!("decoded to wrong variant");
+        }
     }
 }

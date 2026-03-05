@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use mud_core::types::AreaId;
 use mud_mop::message::{AdapterMessage, DriverMessage, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::git::merge_request_manager::MergeRequestManager;
 use crate::git::repo_manager::RepoManager;
 use crate::git::workspace::Workspace;
+use crate::mop_rpc::{MopRequest, MopRpcClient};
 use crate::persistence::ai_key_store::AiKeyStore;
 use crate::persistence::credential_encryptor::CredentialEncryptor;
 use crate::persistence::database_manager::DatabaseManager;
@@ -19,6 +20,8 @@ use crate::persistence::player_store::{AuthResult, PlayerStore};
 use crate::runtime::adapter_manager::AdapterManager;
 use crate::ssh::handler::SshCommand;
 use crate::ssh::server::start_ssh_server;
+use crate::web::build_log::BuildLog;
+use crate::web::build_manager::BuildManager;
 use crate::web::server::{AppState, WebServer, init_templates};
 use crate::web::skills::SkillsService;
 
@@ -97,6 +100,18 @@ pub struct Server {
     web_handle: Option<JoinHandle<()>>,
     /// Path to the master JSONL log file (`{world}/.mud/driver.log`).
     master_log_path: Option<std::path::PathBuf>,
+    /// Build log for tracking SPA build output.
+    build_log: Arc<BuildLog>,
+    /// Build manager for triggering SPA builds (requires workspace).
+    build_manager: Option<Arc<BuildManager>>,
+    /// Receiving end of the MOP RPC channel (web handlers submit requests here).
+    mop_rpc_rx: Option<mpsc::Receiver<MopRequest>>,
+    /// MOP RPC client for passing to web state; created together with `mop_rpc_rx`.
+    mop_rpc_client: Option<MopRpcClient>,
+    /// Pending MOP RPC calls: request_id -> oneshot sender for the response.
+    pending_rpc: HashMap<u64, oneshot::Sender<Result<Value, String>>>,
+    /// Counter for assigning unique request IDs to MOP RPC calls.
+    next_rpc_id: u64,
 }
 
 impl Server {
@@ -118,6 +133,13 @@ impl Server {
         let master_log_path = Some(
             config.world.resolved_path().join(".mud").join("driver.log"),
         );
+        let build_log = Arc::new(BuildLog::new(200));
+        let build_cache_path = std::path::PathBuf::from(&config.http.build_cache_path);
+        let build_manager = Some(Arc::new(BuildManager::new(Arc::clone(&build_log), build_cache_path)));
+
+        // Create the MOP RPC channel for web-handler-to-adapter communication.
+        let (mop_rpc_tx, mop_rpc_rx) = mpsc::channel::<MopRequest>(32);
+        let mop_rpc_client = MopRpcClient::new(mop_rpc_tx);
 
         Self {
             config,
@@ -132,6 +154,12 @@ impl Server {
             area_template: None,
             web_handle: None,
             master_log_path,
+            build_log,
+            build_manager,
+            mop_rpc_rx: Some(mop_rpc_rx),
+            mop_rpc_client: Some(mop_rpc_client),
+            pending_rpc: HashMap::new(),
+            next_rpc_id: 1_000_000, // Start high to avoid collisions with adapter request IDs
         }
     }
 
@@ -218,6 +246,9 @@ impl Server {
                     http_client: reqwest::Client::new(),
                     portal_socket: self.config.http.portal_socket.clone(),
                     anthropic_base_url: self.config.ai.anthropic_base_url.clone(),
+                    build_manager: self.build_manager.clone(),
+                    build_log: Arc::clone(&self.build_log),
+                    mop_rpc: self.mop_rpc_client.clone(),
                 };
 
                 let web_server = WebServer::new(self.config.http.clone(), state);
@@ -563,12 +594,17 @@ impl Server {
         self.adapter_manager.shutdown();
     }
 
-    /// Unified event loop: handle both SSH commands and adapter messages
-    /// using `tokio::select!`.
+    /// Unified event loop: handle SSH commands, adapter messages, and MOP RPC
+    /// requests from web handlers using `tokio::select!`.
     async fn run_event_loop(
         &mut self,
         mut ssh_cmd_rx: mpsc::Receiver<SshCommand>,
     ) -> Result<()> {
+        // Take the receiver out of the Option so we can use it in the loop.
+        // If it was already taken (shouldn't happen), create a dummy channel.
+        let mut mop_rpc_rx = self.mop_rpc_rx.take()
+            .unwrap_or_else(|| mpsc::channel::<MopRequest>(1).1);
+
         loop {
             tokio::select! {
                 Some(cmd) = ssh_cmd_rx.recv() => {
@@ -576,6 +612,9 @@ impl Server {
                 }
                 Some(msg) = self.adapter_manager.recv() => {
                     self.handle_adapter_message(msg).await;
+                }
+                Some(rpc_req) = mop_rpc_rx.recv() => {
+                    self.handle_mop_rpc_request(rpc_req).await;
                 }
                 else => {
                     info!("Event loop: all channels closed, shutting down");
@@ -585,6 +624,44 @@ impl Server {
         }
         self.adapter_manager.shutdown();
         Ok(())
+    }
+
+    /// Handle a MOP RPC request submitted by a web handler.
+    ///
+    /// Assigns a unique request ID, stores the response channel, and sends
+    /// the message to the adapter. The adapter's `CallResult`/`CallError`
+    /// response will be routed back via [`complete_rpc`].
+    async fn handle_mop_rpc_request(&mut self, rpc_req: MopRequest) {
+        let rpc_id = self.next_rpc_id;
+        self.next_rpc_id += 1;
+
+        // Replace the request_id in the message with our assigned ID.
+        let message = replace_request_id(rpc_req.message, rpc_id);
+
+        // Store the oneshot sender so we can deliver the response later.
+        self.pending_rpc.insert(rpc_id, rpc_req.response_tx);
+
+        // Send to the adapter.
+        let lang = self.adapter_language.as_deref().unwrap_or("ruby");
+        if let Err(e) = self.adapter_manager.send_to(lang, message).await {
+            error!(%e, rpc_id, "failed to send MOP RPC request to adapter");
+            if let Some(tx) = self.pending_rpc.remove(&rpc_id) {
+                let _ = tx.send(Err(format!("adapter send failed: {e}")));
+            }
+        }
+    }
+
+    /// Complete a pending MOP RPC call by delivering the adapter's response
+    /// to the waiting web handler.
+    ///
+    /// Returns `true` if a pending RPC was found and completed.
+    fn complete_rpc(&mut self, request_id: u64, result: Result<Value, String>) -> bool {
+        if let Some(tx) = self.pending_rpc.remove(&request_id) {
+            let _ = tx.send(result);
+            true
+        } else {
+            false
+        }
     }
 
     /// Handle a command arriving from an SSH connection.
@@ -659,6 +736,22 @@ impl Server {
                     Self::append_master_log(log_path, &level, &message, area.as_deref());
                 }
             }
+            AdapterMessage::CallResult {
+                request_id,
+                result,
+            } => {
+                if !self.complete_rpc(request_id, Ok(result)) {
+                    warn!(request_id, "received CallResult for unknown RPC request");
+                }
+            }
+            AdapterMessage::CallError {
+                request_id,
+                error,
+            } => {
+                if !self.complete_rpc(request_id, Err(error.clone())) {
+                    warn!(request_id, %error, "received CallError for unknown RPC request");
+                }
+            }
             AdapterMessage::DriverRequest {
                 request_id,
                 action,
@@ -705,6 +798,7 @@ impl Server {
             "workspace_commit" => return self.handle_workspace_commit(request_id, params).await,
             "workspace_pull" => return self.handle_workspace_pull(request_id, params).await,
             "workspace_checkout" => return self.handle_workspace_checkout(request_id, params).await,
+            "workspace_checkout_branch" => return self.handle_workspace_checkout_branch(request_id, params).await,
             "workspace_branches" => return self.handle_workspace_branches(request_id, params).await,
             "workspace_create_branch" => return self.handle_workspace_create_branch(request_id, params).await,
             "mr_create" => return self.handle_mr_create(request_id, params).await,
@@ -1558,10 +1652,27 @@ impl Server {
         let branch = get_string_param(&params, "branch").unwrap_or_else(|| "develop".into());
 
         match ws.commit(&ns, &name, &author, &message, &branch) {
-            Ok(oid) => DriverMessage::RequestResponse {
-                request_id,
-                result: Value::String(oid),
-            },
+            Ok(oid) => {
+                // After commit succeeds, trigger SPA build if applicable.
+                // Use @dev path/key for develop branch so the build cache
+                // and vite base URL match the serving URL.
+                if let Some(ref build_manager) = self.build_manager {
+                    let (area_path, area_key, base_url) = if branch == "develop" {
+                        let path = ws.dev_path(&ns, &name);
+                        (path, format!("{ns}/{name}@dev"), format!("/project/{ns}/{name}@dev/"))
+                    } else {
+                        let path = ws.workspace_path(&ns, &name);
+                        (path, format!("{ns}/{name}"), format!("/project/{ns}/{name}/"))
+                    };
+                    if BuildManager::is_spa(&area_path) {
+                        build_manager.trigger_build(area_key, area_path, base_url);
+                    }
+                }
+                DriverMessage::RequestResponse {
+                    request_id,
+                    result: Value::String(oid),
+                }
+            }
             Err(e) => DriverMessage::RequestError {
                 request_id,
                 error: format!("workspace_commit failed: {}", e),
@@ -1648,6 +1759,60 @@ impl Server {
             Err(e) => DriverMessage::RequestError {
                 request_id,
                 error: format!("workspace_checkout failed: {}", e),
+            },
+        }
+    }
+
+    async fn handle_workspace_checkout_branch(
+        &self,
+        request_id: u64,
+        params: Value,
+    ) -> DriverMessage {
+        let ws = match &self.workspace {
+            Some(ws) => ws,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "workspace not configured".into(),
+                };
+            }
+        };
+        let ns = match get_string_param(&params, "namespace") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'namespace' parameter".into(),
+                };
+            }
+        };
+        let name = match get_string_param(&params, "name") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'name' parameter".into(),
+                };
+            }
+        };
+        let branch = match get_string_param(&params, "branch") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'branch' parameter".into(),
+                };
+            }
+        };
+
+        match ws.checkout_branch(&ns, &name, &branch) {
+            Ok(()) => DriverMessage::RequestResponse {
+                request_id,
+                result: Value::Bool(true),
+            },
+            Err(e) => DriverMessage::RequestError {
+                request_id,
+                error: format!("workspace_checkout_branch failed: {}", e),
             },
         }
     }
@@ -2126,6 +2291,39 @@ fn mr_to_value(mr: &crate::persistence::merge_request_store::MergeRequest) -> Va
         Value::String(mr.updated_at.to_rfc3339()),
     );
     Value::Map(m)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: replace request_id in a DriverMessage variant
+// ---------------------------------------------------------------------------
+
+/// Replace the `request_id` field in a [`DriverMessage`] variant with a new value.
+///
+/// This is used by the MOP RPC infrastructure to assign unique request IDs
+/// to outgoing messages so responses can be routed back to the correct caller.
+fn replace_request_id(msg: DriverMessage, new_id: u64) -> DriverMessage {
+    match msg {
+        DriverMessage::CheckBuilderAccess {
+            user,
+            namespace,
+            area,
+            action,
+            ..
+        } => DriverMessage::CheckBuilderAccess {
+            request_id: new_id,
+            user,
+            namespace,
+            area,
+            action,
+        },
+        DriverMessage::GetWebData { area_key, .. } => DriverMessage::GetWebData {
+            request_id: new_id,
+            area_key,
+        },
+        // For other variants that have a request_id, add arms here as needed.
+        // Variants without request_id pass through unchanged.
+        other => other,
+    }
 }
 
 // ---------------------------------------------------------------------------

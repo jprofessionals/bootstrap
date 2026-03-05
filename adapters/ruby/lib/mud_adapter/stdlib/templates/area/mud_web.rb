@@ -1,6 +1,8 @@
 # Uncomment the next line to switch to SPA mode:
 # web_mode :spa
 
+# Template data — returned as JSON to the driver, which renders
+# web/templates/index.html using the Tera template engine.
 web_data do |area, helpers|
   {
     area_name: File.basename(area.path),
@@ -12,15 +14,15 @@ web_data do |area, helpers|
   }
 end
 
-# Simple API routes (legacy) — available in both ERB and SPA modes:
+# Simple API routes — served by the adapter, proxied via /project/<ns>/<area>/api/*:
 # web_routes do |r, area, _session|
 #   r.get 'status' do
 #     { status: 'ok', area: File.basename(area.path) }
 #   end
 # end
 
-# Full Rack app — use for richer backends. Return 404 to fall through to
-# SPA/ERB frontend serving. Receives work_path so you can require area code.
+# Full Rack app — use for richer API backends. Return 404 to fall through.
+# Receives work_path so you can require area code.
 # web_app do |work_path|
 #   ->(env) {
 #     req = Rack::Request.new(env)

@@ -18,9 +18,14 @@ use tracing::Level;
 use crate::config::HttpConfig;
 use crate::git::repo_manager::RepoManager;
 use crate::git::workspace::Workspace;
+use crate::mop_rpc::MopRpcClient;
 use crate::persistence::ai_key_store::AiKeyStore;
 use crate::persistence::player_store::PlayerStore;
 use crate::web::ai::ai_routes;
+use crate::web::build_log::BuildLog;
+use crate::web::build_manager::BuildManager;
+use crate::web::editor_files::editor_file_routes;
+use crate::web::project::{build_log_routes, project_routes};
 use crate::web::skills::SkillsService;
 
 // ---------------------------------------------------------------------------
@@ -38,6 +43,9 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub portal_socket: String,
     pub anthropic_base_url: Option<String>,
+    pub build_manager: Option<Arc<BuildManager>>,
+    pub build_log: Arc<BuildLog>,
+    pub mop_rpc: Option<MopRpcClient>,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,9 +66,27 @@ impl WebServer {
     ///
     /// This function blocks until the server is shut down.
     pub async fn start(self) -> Result<()> {
+        let world_path = self.state.workspace.world_path().to_path_buf();
+        let build_cache_path = std::path::PathBuf::from(&self.config.build_cache_path);
+
+        // Sub-routers that manage their own state (return Router<()>).
+        // These must be added via nest_service since the main router uses AppState.
+        let editor = editor_file_routes(world_path.clone(), self.state.mop_rpc.clone());
+        let builder = build_log_routes(self.state.build_log.clone());
+        let project = project_routes(
+            world_path,
+            build_cache_path,
+            self.state.build_log.clone(),
+            self.state.mop_rpc.clone(),
+            self.state.portal_socket.clone(),
+        );
+
         let app = Router::new()
             .route("/", get(welcome_handler))
             .nest("/api/ai", ai_routes())
+            .nest_service("/api/editor", editor)
+            .nest_service("/api/builder", builder)
+            .nest_service("/project", project)
             .fallback(proxy_handler)
             .with_state(self.state)
             .layer(

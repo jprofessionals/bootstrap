@@ -34,6 +34,11 @@ module MudAdapter
             r.run BuilderApp
           end
 
+          r.on 'project' do
+            redirect_unless_trailing_slash(r)
+            r.run BuilderApp
+          end
+
           r.root do
             render_view(:welcome, server_name: server_name, page_title: server_name,
                                   account: session['account'])

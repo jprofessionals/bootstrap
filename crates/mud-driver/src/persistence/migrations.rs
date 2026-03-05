@@ -80,6 +80,31 @@ CREATE TABLE IF NOT EXISTS ai_preferences (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )";
 
+pub const ALTER_AI_API_KEYS_ADD_ENABLED: &str = "
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'ai_api_keys' AND column_name = 'enabled'
+    ) THEN
+        ALTER TABLE ai_api_keys ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT true;
+    END IF;
+END $$";
+
+pub const CREATE_AI_CUSTOM_PROVIDERS: &str = "
+CREATE TABLE IF NOT EXISTS ai_custom_providers (
+    id SERIAL PRIMARY KEY,
+    account TEXT NOT NULL,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_mode TEXT NOT NULL,
+    encrypted_key BYTEA NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(account, name)
+)";
+
 /// Driver DB migrations — run against the driver database on boot.
 pub const DRIVER_MIGRATIONS: &[&str] = &[
     CREATE_AREA_DATABASES,
@@ -89,6 +114,8 @@ pub const DRIVER_MIGRATIONS: &[&str] = &[
     CREATE_AI_API_KEYS,
     ALTER_AI_API_KEYS_ADD_PROVIDER,
     CREATE_AI_PREFERENCES,
+    ALTER_AI_API_KEYS_ADD_ENABLED,
+    CREATE_AI_CUSTOM_PROVIDERS,
 ];
 
 // ============================================================================
@@ -104,7 +131,7 @@ mod tests {
 
     #[test]
     fn driver_migrations_count() {
-        assert_eq!(DRIVER_MIGRATIONS.len(), 7);
+        assert_eq!(DRIVER_MIGRATIONS.len(), 9);
     }
 
     #[test]
@@ -165,5 +192,7 @@ mod tests {
         assert!(DRIVER_MIGRATIONS[4].contains("ai_api_keys"));
         assert!(DRIVER_MIGRATIONS[5].contains("ADD COLUMN provider"));
         assert!(DRIVER_MIGRATIONS[6].contains("ai_preferences"));
+        assert!(DRIVER_MIGRATIONS[7].contains("ADD COLUMN enabled"));
+        assert!(DRIVER_MIGRATIONS[8].contains("ai_custom_providers"));
     }
 }

@@ -121,6 +121,7 @@ pub struct HttpConfig {
     pub enabled: bool,
     pub session_secret: Option<String>,
     pub portal_socket: String,
+    pub build_cache_path: String,
 }
 
 impl Default for HttpConfig {
@@ -131,6 +132,7 @@ impl Default for HttpConfig {
             enabled: false,
             session_secret: None,
             portal_socket: "/tmp/mud-portal.sock".into(),
+            build_cache_path: "/tmp/mud-builder-cache".into(),
         }
     }
 }

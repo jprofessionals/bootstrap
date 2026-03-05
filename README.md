@@ -55,14 +55,15 @@ just db-status    # Show container status
 ### Testing
 
 ```bash
-just test         # Run all tests (Rust + Ruby)
-just test-rust    # Rust tests only
+just test         # Run all tests (Rust + Ruby + E2E)
+just test-rust    # Rust unit/integration tests (no Docker image build)
 just test-ruby    # Ruby tests only
-just test-portal  # Portal E2E test (requires Docker + Ruby)
-just test-ignored # Run ignored tests (E2E tests that need Docker)
+just test-e2e     # E2E tests (builds Docker image, runs full stack)
 just test-verbose # Tests with stdout/stderr output
 just test-one <name>  # Run a specific test by name
 ```
+
+The E2E tests (`crates/mud-e2e/`) run the full application stack inside Docker containers — each test file boots isolated PostgreSQL + mud-driver containers and interacts via HTTP.
 
 ### Code Quality
 
@@ -93,9 +94,11 @@ crates/
   mud-core/       # Shared types (AreaId, SessionId, ObjectId)
   mud-mop/        # MOP protocol (MessagePack over Unix socket)
   mud-driver/     # Main server (database, git, SSH, HTTP, orchestration)
+  mud-e2e/        # End-to-end tests (Docker-based, full stack)
 adapters/
   ruby/           # Game logic adapter (areas, commands, web portal)
 config/           # Server configuration (generated)
 docs/             # Architecture documentation
+Dockerfile.e2e    # Docker image for E2E tests
 justfile          # Development recipes
 ```
