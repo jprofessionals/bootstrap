@@ -5,8 +5,9 @@ use serde_json::json;
 
 /// Test SPA build and static asset serving via /project/ paths.
 ///
-/// Creates a minimal Vite SPA, commits (triggering a build), and verifies
-/// that the built HTML and JS assets are served with the correct base URL.
+/// The area template already includes SPA source files (web/src/). This test
+/// enables SPA mode by updating mud_web.rb, commits (triggering a build), and
+/// verifies that the built HTML and JS assets are served with the correct base URL.
 #[tokio::test]
 async fn spa_build_and_serve() {
     let server = TestServer::start().await;
@@ -23,71 +24,26 @@ async fn spa_build_and_serve() {
         .await
         .unwrap();
 
-    // Create SPA source files
-    let package_json = r#"{
-  "name": "test-spa",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "build": "vite build"
-  },
-  "devDependencies": {
-    "vite": "^6.0.0"
-  }
-}"#;
-
-    let vite_config = r#"import { defineConfig } from 'vite'
-export default defineConfig({
-  base: process.env.MUD_BASE_URL || './',
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true
-  }
-})"#;
-
-    let index_html = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Test SPA</title>
-</head>
-<body>
-  <div id="app">SPA Loading...</div>
-  <script type="module" src="./main.js"></script>
-</body>
-</html>"#;
-
-    let main_js = r#"document.getElementById('app').innerHTML = '<h1>SPA Works!</h1>';"#;
-
-    // Create the files via editor API
-    for (path, content) in [
-        ("web/src/package.json", package_json),
-        ("web/src/vite.config.js", vite_config),
-        ("web/src/index.html", index_html),
-        ("web/src/main.js", main_js),
-    ] {
-        let resp = server
-            .client
-            .post(server.url(&format!(
-                "/api/editor/files/{path}?repo=alice/alice"
-            )))
-            .json(&json!({"content": content}))
-            .send()
-            .await
-            .unwrap();
-        assert!(
-            resp.status().is_success(),
-            "creating {path} failed: {}",
-            resp.status()
-        );
-    }
+    // Enable SPA mode by updating mud_web.rb
+    let mud_web = "web_mode :spa\n";
+    let resp = server
+        .client
+        .put(server.url("/api/editor/files/mud_web.rb?repo=alice/alice"))
+        .json(&json!({"content": mud_web}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "updating mud_web.rb failed: {}",
+        resp.status()
+    );
 
     // Commit triggers SPA build for @dev branch
     let resp = server
         .client
         .post(server.url("/git/api/repos/alice/alice/commit"))
-        .json(&json!({"message": "Add SPA source files"}))
+        .json(&json!({"message": "Enable SPA mode"}))
         .send()
         .await
         .unwrap();
