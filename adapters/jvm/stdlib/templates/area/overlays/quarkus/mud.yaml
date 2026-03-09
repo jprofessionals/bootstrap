@@ -1,0 +1,3 @@
+framework: quarkus
+web_mode: template
+entry_class: MudArea

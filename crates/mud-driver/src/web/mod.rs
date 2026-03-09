@@ -8,4 +8,5 @@ pub mod server;
 pub mod session;
 pub mod skills;
 pub mod project;
+pub mod repos;
 pub mod static_files;

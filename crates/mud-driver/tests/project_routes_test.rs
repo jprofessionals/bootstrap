@@ -6,6 +6,9 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
 use mud_driver::web::build_log::BuildLog;
 use mud_driver::web::project::project_routes;
 
@@ -35,7 +38,7 @@ fn setup_dirs(tmp: &std::path::Path) -> (PathBuf, PathBuf) {
 
 fn build_app(world: PathBuf, cache: PathBuf) -> axum::Router {
     let build_log = Arc::new(BuildLog::new(100));
-    project_routes(world, cache, build_log, None, "/nonexistent.sock".into())
+    project_routes(world, cache, build_log, None, "/nonexistent.sock".into(), Arc::new(RwLock::new(HashMap::new())))
 }
 
 #[tokio::test]
@@ -152,7 +155,7 @@ async fn test_serve_tera_template() {
     .unwrap();
 
     let build_log = Arc::new(BuildLog::new(100));
-    let router = project_routes(world, tmp.path().join("build-cache"), build_log, None, "/nonexistent.sock".into());
+    let router = project_routes(world, tmp.path().join("build-cache"), build_log, None, "/nonexistent.sock".into(), Arc::new(RwLock::new(HashMap::new())));
 
     let resp = router
         .clone()

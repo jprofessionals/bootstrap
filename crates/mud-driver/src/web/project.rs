@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,10 +12,15 @@ use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use tokio::net::UnixStream;
+use tokio::sync::RwLock;
 
 use super::build_log::{BuildLog, LogLevel};
 use super::static_files::{serve_static, CacheMode};
 use crate::mop_rpc::MopRpcClient;
+
+/// Shared, dynamically-updated map of per-area web socket paths for API proxying.
+/// Key: "namespace/name", Value: Unix socket path.
+pub type AreaWebSockets = Arc<RwLock<HashMap<String, String>>>;
 
 // ---------------------------------------------------------------------------
 // Shared state for project routes
@@ -32,6 +38,8 @@ struct ProjectState {
     mop_rpc: Option<MopRpcClient>,
     /// Unix socket path for proxying @branch requests to the Ruby portal.
     portal_socket: String,
+    /// Per-area web socket paths for API proxying in SPA mode.
+    area_web_sockets: AreaWebSockets,
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +68,7 @@ pub fn project_routes(
     build_log: Arc<BuildLog>,
     mop_rpc: Option<MopRpcClient>,
     portal_socket: String,
+    area_web_sockets: AreaWebSockets,
 ) -> Router {
     let state = ProjectState {
         world_path,
@@ -67,6 +76,7 @@ pub fn project_routes(
         build_log,
         mop_rpc,
         portal_socket,
+        area_web_sockets,
     };
 
     Router::new()
@@ -162,6 +172,25 @@ async fn serve_area_file(
         }
         return serve_area_path(&state, &ns, &name, &path, &headers).await;
     }
+
+    // Proxy API requests to per-area web sockets (JVM adapter SPA mode)
+    if path.starts_with("api/") || path == "api" {
+        let area_key = format!("{ns}/{name}");
+        let socket_path = state.area_web_sockets.read().await.get(&area_key).cloned();
+        if let Some(socket_path) = socket_path {
+            let method = req.method().clone();
+            let headers = req.headers().clone();
+            let body = req.into_body();
+            return proxy_to_portal(
+                &socket_path,
+                method,
+                &format!("/{path}"),
+                &headers,
+                body,
+            ).await;
+        }
+    }
+
     serve_area_path(&state, &ns, &name, &path, req.headers()).await
 }
 
@@ -349,34 +378,60 @@ async fn proxy_request_to_portal(socket_path: &str, req: Request) -> Response {
     proxy_to_portal(socket_path, method, &path_and_query, &headers, body).await
 }
 
-/// Proxy a request to the Ruby portal via Unix socket.
+/// Proxy a request via Unix socket or TCP connection.
 ///
-/// Forwards the request at `/project/...` to the Ruby portal, which
-/// mounts BuilderApp at both `/builder/` and `/project/`.
+/// If `address` starts with `tcp:`, connects via TCP (e.g. `tcp:127.0.0.1:8081`).
+/// Otherwise, treats it as a Unix socket path.
 async fn proxy_to_portal(
-    socket_path: &str,
+    address: &str,
     method: axum::http::Method,
     path_and_query: &str,
     headers: &HeaderMap,
     body: Body,
 ) -> Response {
-    let stream = match UnixStream::connect(socket_path).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, path = %socket_path, "portal socket connect failed");
-            return Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from(format!("Portal unavailable: {e}")))
-                .unwrap();
-        }
-    };
+    if address.starts_with("tcp:") {
+        let addr = &address[4..];
+        let stream = match tokio::net::TcpStream::connect(addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, addr, "TCP connect failed");
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from(format!("Upstream unavailable: {e}")))
+                    .unwrap();
+            }
+        };
+        proxy_via_stream(TokioIo::new(stream), method, path_and_query, headers, body).await
+    } else {
+        let stream = match UnixStream::connect(address).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, path = %address, "portal socket connect failed");
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from(format!("Portal unavailable: {e}")))
+                    .unwrap();
+            }
+        };
+        proxy_via_stream(TokioIo::new(stream), method, path_and_query, headers, body).await
+    }
+}
 
-    let io = TokioIo::new(stream);
-
+/// Proxy an HTTP request over an established I/O stream.
+async fn proxy_via_stream<T>(
+    io: TokioIo<T>,
+    method: axum::http::Method,
+    path_and_query: &str,
+    headers: &HeaderMap,
+    body: Body,
+) -> Response
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
         Ok(parts) => parts,
         Err(e) => {
-            tracing::error!(error = %e, "portal handshake failed");
+            tracing::error!(error = %e, "proxy handshake failed");
             return Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(Body::from(format!("Handshake failed: {e}")))
@@ -386,7 +441,7 @@ async fn proxy_to_portal(
 
     tokio::spawn(async move {
         if let Err(e) = conn.await {
-            tracing::error!(error = %e, "portal proxy connection error");
+            tracing::error!(error = %e, "proxy connection error");
         }
     });
 
@@ -407,7 +462,7 @@ async fn proxy_to_portal(
     let upstream_resp = match sender.send_request(upstream_req).await {
         Ok(resp) => resp,
         Err(e) => {
-            tracing::error!(error = %e, "portal proxy request failed");
+            tracing::error!(error = %e, "proxy request failed");
             return Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(Body::from(format!("Proxy request failed: {e}")))

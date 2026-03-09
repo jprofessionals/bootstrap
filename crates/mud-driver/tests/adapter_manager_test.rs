@@ -225,7 +225,7 @@ async fn receive_message_from_adapter() {
         .expect("recv timed out")
         .expect("recv returned None");
 
-    assert_eq!(area_loaded, received);
+    assert_eq!(area_loaded, received.message);
 
     manager.shutdown();
 }
@@ -276,7 +276,7 @@ async fn receive_multiple_messages_from_adapter() {
             .await
             .expect("recv timed out")
             .expect("recv returned None");
-        assert_eq!(expected, &received);
+        assert_eq!(expected, &received.message);
     }
 
     manager.shutdown();
@@ -332,7 +332,7 @@ async fn full_session_flow() {
         .await
         .expect("recv timed out")
         .expect("recv returned None");
-    assert_eq!(welcome, received);
+    assert_eq!(welcome, received.message);
 
     // --- Step 3: Driver sends SessionInput ---
     let input = DriverMessage::SessionInput {
@@ -363,7 +363,7 @@ async fn full_session_flow() {
         .await
         .expect("recv timed out")
         .expect("recv returned None");
-    assert_eq!(room_desc, received);
+    assert_eq!(room_desc, received.message);
 
     // --- Step 5: Driver sends SessionEnd ---
     let session_end = DriverMessage::SessionEnd { session_id: 42 };
@@ -476,7 +476,7 @@ async fn call_and_call_result_flow() {
         .await
         .expect("recv timed out")
         .expect("recv returned None");
-    assert_eq!(result_msg, received);
+    assert_eq!(result_msg, received.message);
 
     manager.shutdown();
 }
@@ -527,7 +527,7 @@ async fn ping_pong_through_adapter_manager() {
         .await
         .expect("recv timed out")
         .expect("recv returned None");
-    assert_eq!(pong, received);
+    assert_eq!(pong, received.message);
 
     manager.shutdown();
 }
@@ -579,7 +579,7 @@ async fn area_load_workflow() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(loaded, received);
+    assert_eq!(loaded, received.message);
 
     // Reload area
     let reload = DriverMessage::ReloadArea {
@@ -604,7 +604,7 @@ async fn area_load_workflow() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(loaded, received);
+    assert_eq!(loaded, received.message);
 
     // Unload area
     let unload = DriverMessage::UnloadArea {

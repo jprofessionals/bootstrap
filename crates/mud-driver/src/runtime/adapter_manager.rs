@@ -17,12 +17,20 @@ use crate::config::Config;
 /// The driver communicates with each adapter over a Unix domain socket. This
 /// manager handles spawning adapter child processes, accepting their
 /// connections, and routing messages between the driver core and the adapters.
+/// An adapter message paired with the language identifier of the adapter
+/// that sent it. This lets the server route responses back to the correct adapter.
+#[derive(Debug)]
+pub struct SourcedMessage {
+    pub language: String,
+    pub message: AdapterMessage,
+}
+
 pub struct AdapterManager {
     socket_path: PathBuf,
     adapters: HashMap<String, AdapterConnection>,
     processes: Vec<Child>,
-    incoming_tx: mpsc::Sender<AdapterMessage>,
-    incoming_rx: mpsc::Receiver<AdapterMessage>,
+    incoming_tx: mpsc::Sender<SourcedMessage>,
+    incoming_rx: mpsc::Receiver<SourcedMessage>,
 }
 
 impl AdapterManager {
@@ -75,6 +83,15 @@ impl AdapterManager {
             }
         }
 
+        if let Some(ref jvm) = config.adapters.jvm {
+            if jvm.enabled {
+                let socket_str = self.socket_path.to_string_lossy().to_string();
+                let world_path = config.world.resolved_path();
+                self.spawn_adapter(&jvm.command, &jvm.adapter_path, &socket_str, &world_path)?;
+                info!("spawned JVM adapter process");
+            }
+        }
+
         Ok(listener)
     }
 
@@ -114,12 +131,17 @@ impl AdapterManager {
 
         let (conn, mut adapter_rx) = AdapterConnection::spawn(reader, writer, adapter_name, language.clone());
 
-        // Forward this adapter's messages into the merged incoming channel.
+        // Forward this adapter's messages into the merged incoming channel,
+        // tagging each with the source language.
         let merged_tx = self.incoming_tx.clone();
         let lang_fwd = language.clone();
         tokio::spawn(async move {
             while let Some(msg) = adapter_rx.recv().await {
-                if merged_tx.send(msg).await.is_err() {
+                let sourced = SourcedMessage {
+                    language: lang_fwd.clone(),
+                    message: msg,
+                };
+                if merged_tx.send(sourced).await.is_err() {
                     warn!(language = %lang_fwd, "merged incoming channel closed");
                     break;
                 }
@@ -139,8 +161,9 @@ impl AdapterManager {
         conn.send(msg).await
     }
 
-    /// Receive the next message from any connected adapter.
-    pub async fn recv(&mut self) -> Option<AdapterMessage> {
+    /// Receive the next message from any connected adapter, including which
+    /// adapter sent it.
+    pub async fn recv(&mut self) -> Option<SourcedMessage> {
         self.incoming_rx.recv().await
     }
 
@@ -166,7 +189,14 @@ impl AdapterManager {
         socket_path: &str,
         world_path: &std::path::Path,
     ) -> Result<()> {
-        let child = Command::new(command)
+        let mut cmd = Command::new(command);
+
+        // For Java, pass -jar flag before the adapter path
+        if command.contains("java") {
+            cmd.arg("-jar");
+        }
+
+        let child = cmd
             .arg(adapter_path)
             .arg("--socket")
             .arg(socket_path)

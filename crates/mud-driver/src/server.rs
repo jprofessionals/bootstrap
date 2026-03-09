@@ -4,9 +4,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use mud_core::types::AreaId;
 use mud_mop::message::{AdapterMessage, DriverMessage, Value};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
+
+/// Thread-safe, shared area template registry.
+/// Outer key is template name (e.g. "default", "kotlin:ktor"), inner keys
+/// are file paths with `{{namespace}}` / `{{area_name}}` placeholders.
+pub type AreaTemplates = Arc<RwLock<HashMap<String, HashMap<String, String>>>>;
 
 use crate::config::Config;
 use crate::git::merge_request_manager::MergeRequestManager;
@@ -17,7 +22,7 @@ use crate::persistence::ai_key_store::AiKeyStore;
 use crate::persistence::credential_encryptor::CredentialEncryptor;
 use crate::persistence::database_manager::DatabaseManager;
 use crate::persistence::player_store::{AuthResult, PlayerStore};
-use crate::runtime::adapter_manager::AdapterManager;
+use crate::runtime::adapter_manager::{AdapterManager, SourcedMessage};
 use crate::ssh::handler::SshCommand;
 use crate::ssh::server::start_ssh_server;
 use crate::web::build_log::BuildLog;
@@ -78,8 +83,8 @@ pub struct Server {
     config: Config,
     adapter_manager: AdapterManager,
     sessions: SessionState,
-    /// The language identifier returned by the adapter handshake (e.g. "ruby").
-    adapter_language: Option<String>,
+    /// Language identifiers returned by adapter handshakes (e.g. "ruby", "kotlin").
+    adapter_languages: Vec<String>,
     /// Database manager, initialized when `database.admin_password` is configured.
     #[allow(dead_code)]
     db_manager: Option<DatabaseManager>,
@@ -91,10 +96,14 @@ pub struct Server {
     workspace: Option<Arc<Workspace>>,
     /// Merge request manager for MR lifecycle operations.
     merge_request_manager: Option<Arc<MergeRequestManager>>,
-    /// Area template files provided by the adapter via `set_area_template`.
-    /// Keys are file paths (e.g. "rooms/entrance.rb"), values are content
-    /// with `{{namespace}}` / `{{area_name}}` placeholders.
-    area_template: Option<HashMap<String, String>>,
+    /// Area template registry, shared with the web layer for the repos API.
+    area_templates: AreaTemplates,
+    /// Per-area web socket paths for API proxying in SPA mode.
+    /// Shared with the HTTP server for live routing updates.
+    area_web_sockets: crate::web::project::AreaWebSockets,
+    /// Set of area keys that have reported successful loading.
+    /// Shared with the web layer for the area status API.
+    loaded_areas: Arc<RwLock<std::collections::HashSet<String>>>,
     /// Background task handle for the HTTP web server.
     #[allow(dead_code)]
     web_handle: Option<JoinHandle<()>>,
@@ -145,13 +154,15 @@ impl Server {
             config,
             adapter_manager,
             sessions: SessionState::new(),
-            adapter_language: None,
+            adapter_languages: Vec::new(),
             db_manager: None,
             player_store: None,
             repo_manager: None,
             workspace: None,
             merge_request_manager: None,
-            area_template: None,
+            area_templates: Arc::new(RwLock::new(HashMap::new())),
+            area_web_sockets: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            loaded_areas: Arc::new(RwLock::new(std::collections::HashSet::new())),
             web_handle: None,
             master_log_path,
             build_log,
@@ -175,21 +186,33 @@ impl Server {
             .await
             .context("starting adapter manager")?;
 
-        info!("Waiting for adapter (30s timeout)...");
+        // Count how many adapters are enabled so we know how many to wait for.
+        let mut expected_adapters = 0u32;
+        if self.config.adapters.ruby.as_ref().is_some_and(|r| r.enabled) {
+            expected_adapters += 1;
+        }
+        if self.config.adapters.jvm.as_ref().is_some_and(|j| j.enabled) {
+            expected_adapters += 1;
+        }
 
-        let language = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.adapter_manager.accept_connection(&listener),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!(
-            "timed out waiting for adapter to connect (30s). \
-             Check that the adapter binary exists and the Ruby adapter is configured."
-        ))?
-        .context("accepting adapter connection")?;
+        info!(expected_adapters, "Waiting for adapters (30s timeout)...");
 
-        info!(language, "Adapter connected");
-        self.adapter_language = Some(language);
+        for i in 0..expected_adapters {
+            let language = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.adapter_manager.accept_connection(&listener),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!(
+                "timed out waiting for adapter {}/{} to connect (30s). \
+                 Check that the adapter binary exists and is configured.",
+                i + 1, expected_adapters,
+            ))?
+            .context("accepting adapter connection")?;
+
+            info!(language, adapter = i + 1, total = expected_adapters, "Adapter connected");
+            self.adapter_languages.push(language);
+        }
 
         // -----------------------------------------------------------------
         // Database setup (optional — requires admin_password)
@@ -249,6 +272,9 @@ impl Server {
                     build_manager: self.build_manager.clone(),
                     build_log: Arc::clone(&self.build_log),
                     mop_rpc: self.mop_rpc_client.clone(),
+                    area_web_sockets: Arc::clone(&self.area_web_sockets),
+                    area_templates: Arc::clone(&self.area_templates),
+                    loaded_areas: Arc::clone(&self.loaded_areas),
                 };
 
                 let web_server = WebServer::new(self.config.http.clone(), state);
@@ -305,15 +331,15 @@ impl Server {
     /// Scan the world directory for areas and send LoadArea messages to the
     /// connected adapter for each one.
     pub async fn load_areas(&self) -> Result<()> {
-        let language = self
-            .adapter_language
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("no adapter connected — cannot load areas"))?;
+        if self.adapter_languages.is_empty() {
+            return Err(anyhow::anyhow!("no adapter connected — cannot load areas"));
+        }
 
         let areas = discover_areas(&self.config.world.resolved_path().to_string_lossy())?;
 
         for (area_id, area_path) in &areas {
-            info!(%area_id, path = %area_path, "Loading area");
+            let language = self.language_for_area(area_path);
+            info!(%area_id, path = %area_path, %language, "Loading area");
 
             // Provision per-area database (idempotent)
             let db_url = if let Some(ref db_mgr) = self.db_manager {
@@ -341,7 +367,7 @@ impl Server {
 
             self.adapter_manager
                 .send_to(
-                    language,
+                    &language,
                     DriverMessage::LoadArea {
                         area_id: area_id.clone(),
                         path: area_path.clone(),
@@ -363,11 +389,51 @@ impl Server {
         (session_id, rx)
     }
 
+    /// Return the primary adapter language. Ruby is always preferred since it
+    /// runs the game engine (sessions, area loading, portal). Other adapters
+    /// (e.g. JVM/kotlin) are supplementary and handle specific area types.
+    fn primary_language(&self) -> &str {
+        self.adapter_languages
+            .iter()
+            .find(|l| l.as_str() == "ruby")
+            .map(|s| s.as_str())
+            .or_else(|| self.adapter_languages.first().map(|s| s.as_str()))
+            .unwrap_or("ruby")
+    }
+
+    /// Determine the adapter language for a given area by reading its `mud.yaml`.
+    ///
+    /// If `mud.yaml` exists and specifies a JVM framework (anything other than
+    /// `none`), the area belongs to the "kotlin" adapter. Otherwise it defaults
+    /// to the primary language (Ruby).
+    fn language_for_area(&self, area_path: &str) -> String {
+        let yaml_path = std::path::Path::new(area_path).join("mud.yaml");
+        match std::fs::read_to_string(&yaml_path) {
+            Ok(contents) => {
+                if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&contents) {
+                    if let Some(framework) = yaml.get("framework").and_then(|v| v.as_str()) {
+                        if framework != "none"
+                            && self.adapter_languages.iter().any(|l| l == "kotlin")
+                        {
+                            info!(path = %area_path, %framework, "Routing area to kotlin adapter");
+                            return "kotlin".to_string();
+                        }
+                        info!(path = %area_path, %framework, "Area uses ruby (framework=none or no kotlin adapter)");
+                    }
+                }
+            }
+            Err(e) => {
+                info!(path = %yaml_path.display(), %e, "No mud.yaml found, defaulting to ruby");
+            }
+        }
+        self.primary_language().to_string()
+    }
+
     /// Notify the adapter that a player session has started.
     pub async fn session_start(&self, session_id: u64, username: String) -> Result<()> {
         self.adapter_manager
             .send_to(
-                self.adapter_language.as_deref().unwrap_or("ruby"),
+                self.primary_language(),
                 DriverMessage::SessionStart {
                     session_id,
                     username,
@@ -380,7 +446,7 @@ impl Server {
     pub async fn session_input(&self, session_id: u64, line: String) -> Result<()> {
         self.adapter_manager
             .send_to(
-                self.adapter_language.as_deref().unwrap_or("ruby"),
+                self.primary_language(),
                 DriverMessage::SessionInput { session_id, line },
             )
             .await
@@ -392,7 +458,7 @@ impl Server {
         self.sessions.remove_session(session_id);
         self.adapter_manager
             .send_to(
-                self.adapter_language.as_deref().unwrap_or("ruby"),
+                self.primary_language(),
                 DriverMessage::SessionEnd { session_id },
             )
             .await
@@ -424,7 +490,7 @@ impl Server {
             .accept_connection(listener)
             .await
             .context("accepting adapter connection")?;
-        self.adapter_language = Some(language.clone());
+        self.adapter_languages.push(language.clone());
         Ok(language)
     }
 
@@ -434,7 +500,7 @@ impl Server {
     }
 
     /// Receive the next message from any connected adapter.
-    pub async fn recv_adapter_message(&mut self) -> Option<AdapterMessage> {
+    pub async fn recv_adapter_message(&mut self) -> Option<SourcedMessage> {
         self.adapter_manager.recv().await
     }
 
@@ -457,21 +523,22 @@ impl Server {
         self.merge_request_manager = Some(mrm);
     }
 
-    /// Send a Configure message to the connected adapter with the stdlib DB URL.
-    /// The adapter uses this to connect and run its own schema migrations.
+    /// Send a Configure message to all connected adapters with the stdlib DB URL.
+    /// Each adapter uses this to connect and run its own schema migrations.
     pub async fn send_configure(&self, stdlib_db_url: String) -> Result<()> {
-        if let Some(lang) = &self.adapter_language {
+        for lang in &self.adapter_languages {
             self.adapter_manager
-                .send_to(lang, DriverMessage::Configure { stdlib_db_url })
+                .send_to(lang, DriverMessage::Configure { stdlib_db_url: stdlib_db_url.clone() })
                 .await
-                .context("sending configure to adapter")?;
+                .with_context(|| format!("sending configure to {lang} adapter"))?;
         }
         Ok(())
     }
 
-    /// Send a LoadArea message to the connected adapter.
+    /// Send a LoadArea message to the appropriate adapter based on area type.
     pub async fn send_load_area(&self, area_id: AreaId, path: String) -> Result<()> {
-        if let Some(lang) = &self.adapter_language {
+        if !self.adapter_languages.is_empty() {
+            let lang = self.language_for_area(&path);
             let db_url = if let Some(ref db_mgr) = self.db_manager {
                 if let Err(e) = db_mgr
                     .provision_area_db(&area_id.namespace, &area_id.name)
@@ -490,7 +557,7 @@ impl Server {
             };
 
             self.adapter_manager
-                .send_to(lang, DriverMessage::LoadArea { area_id, path, db_url })
+                .send_to(&lang, DriverMessage::LoadArea { area_id, path, db_url })
                 .await
                 .context("sending LoadArea to adapter")?;
         }
@@ -610,8 +677,8 @@ impl Server {
                 Some(cmd) = ssh_cmd_rx.recv() => {
                     self.handle_ssh_command(cmd).await;
                 }
-                Some(msg) = self.adapter_manager.recv() => {
-                    self.handle_adapter_message(msg).await;
+                Some(sourced) = self.adapter_manager.recv() => {
+                    self.handle_adapter_message(sourced).await;
                 }
                 Some(rpc_req) = mop_rpc_rx.recv() => {
                     self.handle_mop_rpc_request(rpc_req).await;
@@ -641,8 +708,8 @@ impl Server {
         // Store the oneshot sender so we can deliver the response later.
         self.pending_rpc.insert(rpc_id, rpc_req.response_tx);
 
-        // Send to the adapter.
-        let lang = self.adapter_language.as_deref().unwrap_or("ruby");
+        // Send to the primary adapter (Ruby handles portal RPC).
+        let lang = self.primary_language();
         if let Err(e) = self.adapter_manager.send_to(lang, message).await {
             error!(%e, rpc_id, "failed to send MOP RPC request to adapter");
             if let Some(tx) = self.pending_rpc.remove(&rpc_id) {
@@ -710,13 +777,15 @@ impl Server {
     }
 
     /// Handle a message arriving from a language adapter.
-    pub async fn handle_adapter_message(&mut self, msg: AdapterMessage) {
-        match msg {
+    pub async fn handle_adapter_message(&mut self, sourced: SourcedMessage) {
+        let source_lang = sourced.language;
+        match sourced.message {
             AdapterMessage::SessionOutput { session_id, text } => {
                 self.sessions.send_output(session_id, text);
             }
             AdapterMessage::AreaLoaded { area_id } => {
                 info!(%area_id, "Area loaded successfully");
+                self.loaded_areas.write().await.insert(area_id.to_string());
             }
             AdapterMessage::AreaError { area_id, error } => {
                 error!(%area_id, %error, "Area failed to load");
@@ -757,12 +826,10 @@ impl Server {
                 action,
                 params,
             } => {
-                info!(%request_id, %action, "Processing driver request");
+                info!(%request_id, %action, source = %source_lang, "Processing driver request");
                 let response = self.handle_driver_request(request_id, &action, params).await;
-                if let Some(lang) = &self.adapter_language {
-                    if let Err(e) = self.adapter_manager.send_to(lang, response).await {
-                        error!(%e, "failed to send request response");
-                    }
+                if let Err(e) = self.adapter_manager.send_to(&source_lang, response).await {
+                    error!(%e, "failed to send request response to {}", source_lang);
                 }
             }
             other => {
@@ -784,7 +851,10 @@ impl Server {
     ) -> DriverMessage {
         // Mutable handlers (need &mut self).
         if action == "set_area_template" {
-            return self.handle_set_area_template(request_id, params);
+            return self.handle_set_area_template(request_id, params).await;
+        }
+        if action == "register_area_web" {
+            return self.handle_register_area_web(request_id, params).await;
         }
 
         // Handlers that don't require PlayerStore.
@@ -964,7 +1034,12 @@ impl Server {
 
         // Create a default git area for the new builder account.
         if let Some(rm) = &self.repo_manager {
-            if let Err(e) = rm.create_repo(&username, &username, true, self.area_template.as_ref()) {
+            let templates = self.area_templates.read().await;
+            let template = self.config.adapters.default_template.as_ref()
+                .and_then(|name| templates.get(name))
+                .or_else(|| templates.get("default"))
+                .or_else(|| templates.values().next());
+            if let Err(e) = rm.create_repo(&username, &username, true, template) {
                 warn!(%e, "failed to create default area for new account");
             } else if let Some(ws) = &self.workspace {
                 if let Err(e) = ws.checkout(&username, &username) {
@@ -1216,29 +1291,35 @@ impl Server {
 
     /// Store the area template files provided by the adapter.
     /// The adapter sends a map of `{ "files": { "path": "content", ... } }`.
-    fn handle_set_area_template(
-        &mut self,
+    async fn handle_set_area_template(
+        &self,
         request_id: u64,
         params: Value,
     ) -> DriverMessage {
-        let files = match &params {
-            Value::Map(m) => match m.get("files") {
-                Some(Value::Map(files_map)) => {
-                    let mut template = HashMap::new();
-                    for (path, content) in files_map {
-                        if let Value::String(content_str) = content {
-                            template.insert(path.clone(), content_str.clone());
+        let (name, files) = match &params {
+            Value::Map(m) => {
+                let name = match m.get("name") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => "default".to_string(),
+                };
+                match m.get("files") {
+                    Some(Value::Map(files_map)) => {
+                        let mut template = HashMap::new();
+                        for (path, content) in files_map {
+                            if let Value::String(content_str) = content {
+                                template.insert(path.clone(), content_str.clone());
+                            }
                         }
+                        (name, template)
                     }
-                    template
+                    _ => {
+                        return DriverMessage::RequestError {
+                            request_id,
+                            error: "missing 'files' map parameter".into(),
+                        };
+                    }
                 }
-                _ => {
-                    return DriverMessage::RequestError {
-                        request_id,
-                        error: "missing 'files' map parameter".into(),
-                    };
-                }
-            },
+            }
             _ => {
                 return DriverMessage::RequestError {
                     request_id,
@@ -1248,9 +1329,27 @@ impl Server {
         };
 
         let count = files.len();
-        self.area_template = Some(files);
-        info!(count, "Area template set");
+        info!(name = %name, count, "Area template set");
+        self.area_templates.write().await.insert(name, files);
 
+        DriverMessage::RequestResponse {
+            request_id,
+            result: Value::Bool(true),
+        }
+    }
+
+    /// Register a per-area web socket path for API proxying.
+    async fn handle_register_area_web(
+        &self,
+        request_id: u64,
+        params: Value,
+    ) -> DriverMessage {
+        let area_key = get_string_param(&params, "area_key")
+            .unwrap_or_default();
+        let socket_path = get_string_param(&params, "socket_path")
+            .unwrap_or_default();
+        info!(area_key = %area_key, socket_path = %socket_path, "Area web socket registered");
+        self.area_web_sockets.write().await.insert(area_key, socket_path);
         DriverMessage::RequestResponse {
             request_id,
             result: Value::Bool(true),
@@ -1301,7 +1400,25 @@ impl Server {
             _ => true,
         };
 
-        match rm.create_repo(&ns, &name, seed, self.area_template.as_ref()) {
+        let template_name = match &params {
+            Value::Map(m) => m
+                .get("template")
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .or_else(|| self.config.adapters.default_template.clone()),
+            _ => self.config.adapters.default_template.clone(),
+        };
+
+        let templates = self.area_templates.read().await;
+        let template = template_name
+            .as_ref()
+            .and_then(|name| templates.get(name))
+            .or_else(|| templates.get("default"))
+            .or_else(|| templates.values().next());
+
+        match rm.create_repo(&ns, &name, seed, template) {
             Ok(()) => DriverMessage::RequestResponse {
                 request_id,
                 result: Value::Bool(true),
@@ -1407,21 +1524,18 @@ impl Server {
         }
     }
 
-    /// Reload an area by sending ReloadArea to the connected adapter.
+    /// Reload an area by sending ReloadArea to the appropriate adapter.
     async fn handle_area_reload(
         &self,
         request_id: u64,
         params: Value,
     ) -> DriverMessage {
-        let language = match &self.adapter_language {
-            Some(l) => l.clone(),
-            None => {
-                return DriverMessage::RequestError {
-                    request_id,
-                    error: "no adapter connected".into(),
-                };
-            }
-        };
+        if self.adapter_languages.is_empty() {
+            return DriverMessage::RequestError {
+                request_id,
+                error: "no adapter connected".into(),
+            };
+        }
         let area_id = match get_string_param(&params, "area_id") {
             Some(v) => v,
             None => {
@@ -1440,6 +1554,7 @@ impl Server {
                 };
             }
         };
+        let language = self.language_for_area(&path);
 
         let db_url = if let Some(ref db_mgr) = self.db_manager {
             let parts: Vec<&str> = area_id.splitn(2, '/').collect();

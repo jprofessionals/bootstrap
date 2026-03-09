@@ -50,7 +50,38 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
     assert!(status.success(), "cargo build --release --target musl failed");
     log(t0, "Musl binary built");
 
-    // Build Docker image (copies pre-built binary, reinstalls Ruby gems)
+    // Build JVM adapter: launcher JAR and publish MOP/stdlib to local Maven
+    log(t0, "Building JVM adapter...");
+    let jvm_dir = project_root.join("adapters/jvm");
+    let gradlew = jvm_dir.join("gradlew");
+    if gradlew.exists() {
+        let status = std::process::Command::new(&gradlew)
+            .args([
+                ":mud-mop-jvm:publishToMavenLocal",
+                ":stdlib:publishToMavenLocal",
+                ":launcher:jar",
+                "--no-daemon",
+            ])
+            .current_dir(&jvm_dir)
+            .status()
+            .expect("failed to run gradlew");
+        assert!(status.success(), "JVM adapter build failed");
+
+        // Copy local Maven artifacts into a directory Docker can COPY
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        let m2_mud = std::path::PathBuf::from(&home).join(".m2/repository/mud");
+        let local_m2 = project_root.join("adapters/jvm/local-m2/mud");
+        if m2_mud.exists() {
+            // Remove stale copy
+            let _ = std::fs::remove_dir_all(&local_m2);
+            copy_dir_recursive(&m2_mud, &local_m2);
+        }
+        log(t0, "JVM adapter built");
+    } else {
+        log(t0, "No JVM adapter gradlew found, skipping JVM build");
+    }
+
+    // Build Docker image (copies pre-built binary, adapters, and dependencies)
     log(t0, "Building Docker image...");
     let status = std::process::Command::new("docker")
         .args([
@@ -67,6 +98,21 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
     assert!(status.success(), "docker build failed");
     log(t0, "Docker image built");
 });
+
+/// Recursively copy a directory tree (used to stage Maven artifacts for Docker COPY).
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("create dst dir");
+    for entry in std::fs::read_dir(src).expect("read src dir") {
+        let entry = entry.expect("dir entry");
+        let ty = entry.file_type().expect("file type");
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_path);
+        } else {
+            std::fs::copy(entry.path(), &dst_path).expect("copy file");
+        }
+    }
+}
 
 /// A unique ID for naming Docker resources in this test instance.
 fn unique_id() -> String {
@@ -140,6 +186,10 @@ adapters:
     enabled: true
     command: "ruby"
     adapter_path: "adapters/ruby/bin/mud-adapter"
+  jvm:
+    enabled: true
+    command: "java"
+    adapter_path: "adapters/jvm/launcher.jar"
 "#
         );
 
