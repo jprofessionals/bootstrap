@@ -1,39 +1,47 @@
 # MUD Driver Architecture
 
-A multi-user dungeon platform built as a Rust driver with Ruby and JVM adapters, communicating over the MOP protocol (MessagePack over Unix sockets).
+A multi-user dungeon platform built as a Rust driver with Ruby, JVM, and LPC/Rust adapters, communicating over the MOP protocol (MessagePack over Unix sockets).
 
 ---
 
 ## System Overview
 
 ```
-                   ┌──────────────────────────────────────────┐
-                   │              Rust Driver                  │
-                   │                                          │
-  SSH ────────────►│  server.rs (orchestration)               │
-                   │    ├─ persistence/ (PostgreSQL)           │
-  HTTP ───────────►│    ├─ git/ (bare repos, MRs, workspace)  │
-   │               │    ├─ ssh/ (russh)                       │
-   │               │    ├─ web/ (axum, AI providers)          │
-   │               │    └─ build/ (BuildManager, SPA builds)  │
-   │               └──────────┬─────────────────┬─────────────┘
-   │                          │ MOP (Unix sock)  │ MOP (Unix sock)
-   │  /project/* ─► driver   ▼                  ▼
-   │  /api/builder/*  ┌────────────────┐  ┌────────────────────┐
-   │  /api/editor/*   │  Ruby Adapter  │  │   JVM Adapter      │
-   │                  │                │  │                    │
-   │                  │  client.rb     │  │  launcher.jar      │
-   │                  │  ├─ area_loader│  │  ├─ GradleBuilder  │
-   │                  │  ├─ stdlib/    │  │  ├─ AreaProcess    │
-   │                  │  └─ portal/    │  │  │  ├─ FlywayRunner│
-   └── proxy ────────►│    (Roda apps) │  │  │  └─ KtorWebSrv  │
-   └── proxy (tcp) ──►│               │  │  └─ mud-stdlib.jar  │
-                      └────────────────┘  └────────────────────┘
+                   ┌──────────────────────────────────────────────┐
+                   │              Rust Driver                      │
+                   │                                              │
+  SSH ────────────►│  server.rs (orchestration)                   │
+                   │    ├─ persistence/ (PostgreSQL)               │
+  HTTP ───────────►│    ├─ git/ (bare repos, MRs, workspace)      │
+   │               │    ├─ ssh/ (russh)                           │
+   │               │    ├─ web/ (axum, AI providers)              │
+   │               │    └─ build/ (BuildManager, SPA builds)      │
+   │               └───┬──────────────┬───────────────┬───────────┘
+   │                   │ MOP          │ MOP           │ MOP
+   │  /project/*       ▼              ▼               ▼
+   │  /api/*    ┌────────────┐  ┌───────────┐  ┌──────────────┐
+   │            │   Ruby     │  │   JVM     │  │  LPC/Rust    │
+   │            │  Adapter   │  │  Adapter  │  │  Adapter     │
+   │            │            │  │           │  │              │
+   │            │ area_loader│  │ launcher  │  │ ┌──────────┐ │
+   │            │ stdlib/    │  │ Gradle    │  │ │  LPC VM  │ │
+   └── proxy ──►│ portal/   │  │ AreaProc  │  │ └──────────┘ │
+   └── proxy ──►│ (Roda)    │  │ Ktor/API  │  │ ┌──────────┐ │
+                └────────────┘  └───────────┘  │ │ Rust .so │ │
+                                               │ │ modules  │ │
+                                               │ └──────────┘ │
+                                               └──────────────┘
 ```
 
-**HTTP flow**: Axum handles `/project/*` (built SPA/template assets), `/api/builder/*` (build logs), `/api/editor/*` (file CRUD), `/api/ai/*`, and HTTP git directly. Portal pages and area API routes (`web_routes`/`web_app`) are reverse-proxied to the Ruby portal (Puma/Roda) over a Unix socket. JVM area API routes are proxied via TCP to the embedded Ktor web server.
+**HTTP flow**: Axum handles `/project/*` (built SPA/template assets), `/api/builder/*` (build logs), `/api/editor/*` (file CRUD), `/api/ai/*`, and HTTP git directly. Portal pages and area API routes (`web_routes`/`web_app`) are reverse-proxied to the Ruby portal (Puma/Roda) over a Unix socket. JVM and LPC/Rust area API routes are proxied to their respective adapter web servers.
 
-**Language-aware routing**: When an area is loaded or reloaded, the driver reads `mud.yaml` from the area's path to determine the `framework` field. If a framework is specified (e.g., `ktor`) and a Kotlin adapter is connected, the area is routed to the JVM adapter; otherwise it defaults to Ruby.
+**Language-aware routing**: When an area is loaded, the driver reads `mud.yaml` to determine the `language` field. Routing:
+- `language: ruby` (or no `mud.yaml`) → Ruby adapter (default)
+- `language: lpc` → LPC/Rust adapter (LPC VM + .so loader)
+- `language: rust` → LPC/Rust adapter (.so loader only)
+- `framework: ktor|spring-boot|quarkus` → JVM adapter
+
+**Multi-language adapters**: The MOP Handshake supports an optional `languages` field, allowing one adapter to handle multiple language types. The LPC/Rust adapter declares `languages: ["lpc", "rust"]`, and the driver registers both as routing targets pointing to the same connection. Broadcast messages (like `Configure`) use `adapter_primary_languages` to avoid sending duplicates.
 
 ---
 
@@ -45,8 +53,11 @@ Defined in `crates/mud-mop/`. Two message enums:
 
 **DriverMessage** (Rust → Adapter):
 - `LoadArea`, `ReloadArea`, `UnloadArea` — area lifecycle
+- `ReloadProgram` — surgical diff-based reload of specific changed files
 - `SessionStart`, `SessionInput`, `SessionEnd` — player sessions
+- `Call` — RPC into in-game objects (with `CallResult`/`CallError` responses)
 - `Configure` — send stdlib DB URL after boot
+- `CheckBuilderAccess`, `GetWebData` — driver-initiated RPC
 - `RequestResponse`, `RequestError` — replies to adapter requests
 - `Ping`
 
@@ -54,8 +65,10 @@ Defined in `crates/mud-mop/`. Two message enums:
 - `AreaLoaded`, `AreaError` — load results
 - `SessionOutput`, `SendMessage` — text to players
 - `DriverRequest` — generic request (action string + params map)
+- `ProgramReloaded`, `ProgramReloadError` — surgical reload results
+- `InvalidateCache` — notify stale cached values
 - `Log` — structured area logging
-- `Handshake`, `Pong`
+- `Handshake` (with optional `languages: Vec<String>` for multi-language adapters), `Pong`
 
 The `DriverRequest`/`RequestResponse` pattern provides a synchronous RPC channel from adapters to Rust (e.g., `mr_create`, `account_authenticate`, `provision_area_db`, `set_area_template`, `register_area_web`).
 
@@ -65,7 +78,7 @@ The driver also initiates RPC calls to the adapter for web-related decisions:
 - `CheckBuilderAccess` — ask the adapter whether a user has access to a given area (used by `/project/*` and `/api/builder/*` routes)
 - `GetWebData` — request template data from the area's `web_data` block (used for Tera template rendering)
 
-**Multi-adapter support**: The `AdapterManager` manages multiple concurrent adapter connections, each identified by a language (e.g., `ruby`, `kotlin`). Messages are routed to the correct adapter based on the area's language. The driver waits for all configured adapters to connect before booting.
+**Multi-adapter support**: The `AdapterManager` manages multiple concurrent adapter connections, each identified by a language (e.g., `ruby`, `kotlin`, `lpc`, `rust`). Messages are routed to the correct adapter based on the area's language. A single adapter can register for multiple languages via the `languages` handshake field. The driver waits for all configured adapters to connect before booting.
 
 ---
 
@@ -164,7 +177,7 @@ git clone http://user:password@host:port/git/namespace/area.git
 The central coordinator. Key state:
 
 - `SessionState` — maps session IDs to output channels
-- `AdapterManager` — spawns and connects to adapter processes (Ruby + JVM)
+- `AdapterManager` — spawns and connects to adapter processes (Ruby, JVM, LPC/Rust)
 - `DatabaseManager` — PostgreSQL pools and migrations
 - `PlayerStore` — account CRUD and authentication
 - `RepoManager` / `Workspace` — git operations (checkout, pull, commit, branch switching)
@@ -173,7 +186,7 @@ The central coordinator. Key state:
 - `MopRpcClient` — driver-initiated RPC to the adapter (access checks, template data)
 
 **Boot sequence** (`boot()`):
-1. Start adapter processes (Ruby + JVM), wait for all handshakes
+1. Start adapter processes (Ruby, JVM, LPC/Rust), wait for all handshakes
 2. Initialize databases (driver + stdlib), run migrations
 3. Send stdlib DB URL to adapters via `Configure` message
 4. Create `PlayerStore`, `RepoManager`, `Workspace`, `MergeRequestManager`
@@ -328,6 +341,88 @@ Annotated with `@MudArea`, `@MudRoom`, `@MudItem`, `@MudNPC`, `@MudDaemon`. Disc
 
 ---
 
+## LPC/Rust Adapter Internals
+
+### Architecture
+
+The LPC/Rust adapter (`adapters/lpc/`) runs as a single MOP process that hosts both the LPC VM (for `.c` files) and a dynamic `.so` module loader (for `.rs` files). It handles two area types:
+
+- **`language: lpc`** — LPC game objects (rooms, items, NPCs, daemons as `.c` files) with Rust `.so` web modules
+- **`language: rust`** — Pure Rust areas where everything is a `.so` module
+
+The adapter declares both languages in its handshake (`languages: ["lpc", "rust"]`), so the driver routes both area types to it.
+
+### Unified Program Model
+
+Every piece of reloadable code is a **program** in the driver's version tree:
+
+| Type          | Source       | Compiled form       | Reload unit              |
+|---------------|--------------|---------------------|--------------------------|
+| LPC object    | `.c` file    | VM bytecode         | Single file              |
+| Rust module   | `.rs` file   | `.so` dynamic lib   | Single file              |
+| Ruby object   | `.rb` file   | Interpreted         | Single file              |
+| Kotlin object | `.kt` file   | JVM class           | Gradle module            |
+
+### Rust `.so` Module System
+
+Rust area code compiles to granular `.so` modules with C ABI entry points:
+
+```rust
+#[no_mangle]
+pub extern "C" fn mud_module_init(registrar: &mut ModuleRegistrar) {
+    registrar.set_path("rooms/entrance");
+    registrar.set_type(ModuleType::Room);
+    registrar.add_dependency("/std/room");
+    registrar.register_kfun("title", title);
+    registrar.register_kfun("description", description);
+}
+```
+
+**Module types**: `Room`, `Item`, `NPC`, `Daemon`, `Web`
+
+**Convention-based compilation**: The adapter discovers `.rs` files by directory (`rooms/`, `items/`, `npcs/`, `daemons/`, `web/`) and compiles each to a cdylib `.so`. No manual `Cargo.toml` registration needed.
+
+**Web modules** export Axum router fragments via `register_router()`. The adapter runs one Axum server per area on a Unix socket, registered with the driver via `register_area_web`. Web `.so` modules contribute route fragments merged into the area's router.
+
+**Cache policy**: Methods declare cacheability via attributes (`#[mud_kfun(cacheable)]`, `#[mud_kfun(volatile)]`, `#[mud_kfun(ttl = "30s")]`).
+
+### Hot-Reload
+
+On git push, the driver sends `ReloadProgram` with changed files:
+
+- **`.rs` files**: Recompile to `.so`, `dlclose` old, `dlopen` new, call `mud_module_init`. Web modules trigger a router rebuild.
+- **`.c` files**: Recompile via LPC VM, fire `upgraded()` on dependents.
+
+Compiled `.so` artifacts live in `.mud/build/` within the area's work path (gitignored).
+
+### LPC VM
+
+The LPC VM (`crates/lpc-vm/`) provides full DGD-compatible LPC language support:
+
+- **Pipeline**: `.c` source → Preprocessor → Parser → AST → Compiler → Bytecode → VM execution
+- **Object model**: Master objects, clones, light-weight objects, inheritance, dependency graph
+- **Kfun registry**: Built-in DGD kfuns (string, math, array, mapping, object, type, timing, crypto, connection, serialization, file I/O, misc) + stdlib-registered custom kfuns via `.so` modules
+- **Resource control**: `rlimits(ticks; stack_depth)`, `atomic` transactional execution
+- **Special objects**: Auto object (`sys/auto.c`) inherited by all objects, Driver object (`sys/driver.c`) for VM↔driver interface
+
+### Area Templates
+
+Templates are stored as files on disk at `adapters/lpc/templates/area/{rust,lpc}/`. The driver's `scan_disk_templates()` picks them up (same mechanism as JVM templates). Each subdirectory becomes a named template.
+
+### Driver State Store
+
+The driver is the single source of truth for all object state. Adapters read and write properties through MOP:
+
+- **Core properties** — owned by the object's program, overwritten on upgrade
+- **Attached properties** — owned by other areas, preserved across program upgrades
+- **Location tracking** — which room/container/player an object is in
+
+### Cross-Language Object Interaction
+
+When LPC code calls `sword->get_description()` and the sword lives in a Ruby area, the call routes through the driver's object broker: LPC adapter → MOP → Driver (lookup ObjectId → Ruby area) → MOP → Ruby adapter → result back. All values marshal through MessagePack.
+
+---
+
 ### RackApp Base Class (`stdlib/web/rack_app.rb`)
 
 Roda subclass that areas can extend for custom web APIs. Provides `area_db` access (wired by BuilderApp from the container) and JSON/all-verbs plugins. Subclasses are auto-detected during `WebDataDSL` evaluation — if a new RackApp subclass is defined in `mud_web.rb`, the DSL auto-sets the `app_block`.
@@ -393,6 +488,52 @@ Areas serve web content at `/project/<ns>/<area>/`, hosted directly by the Rust 
         └── index.html                # Tera template
 ```
 
+### Rust Area
+
+```
+<area>/
+├── mud.yaml              # language: rust, web_mode: spa
+├── agents.md             # Platform API reference
+├── rooms/                # .rs files → .so modules (ModuleType::Room)
+│   └── entrance.rs
+├── items/                # .rs files → .so modules (ModuleType::Item)
+├── npcs/                 # .rs files → .so modules (ModuleType::NPC)
+├── daemons/              # .rs files → .so modules (ModuleType::Daemon)
+├── web/                  # .rs files → .so modules (ModuleType::Web, Axum routes)
+│   └── routes.rs
+├── db/
+│   └── migrations/       # Database migrations
+└── web-spa/
+    └── src/              # Vite SPA source (SPA mode)
+        ├── index.html
+        ├── main.js
+        ├── package.json
+        └── vite.config.js
+```
+
+### LPC Area
+
+```
+<area>/
+├── mud.yaml              # language: lpc, web_mode: spa
+├── agents.md             # Platform API reference
+├── rooms/                # LPC .c files (inherit "/std/room")
+│   ├── entrance.c
+│   └── hall.c
+├── items/                # LPC .c files
+├── npcs/                 # LPC .c files
+├── daemons/              # LPC .c files
+│   └── area_daemon.c
+├── web/                  # Rust .rs files → .so web modules (Axum routes)
+│   └── routes.rs
+├── db/
+│   └── migrations/       # Database migrations
+└── web-spa/
+    └── src/              # Vite SPA source (SPA mode)
+```
+
+No config files or loader DSL for LPC — the `.c` code is the configuration. Each file inherits from the stdlib (`inherit "/std/room";`) and defines its behavior in `create()`.
+
 ---
 
 ## Session Lifecycle
@@ -421,7 +562,7 @@ Fast tests in `crates/mud-driver/tests/` that don't need the full stack (all 192
 A dedicated crate that runs the full application stack inside Docker containers. Each test file boots its own isolated pair of containers (PostgreSQL + mud-driver with Ruby + JVM adapters) via testcontainers, and interacts only via HTTP — no mocks.
 
 **Infrastructure:**
-- `Dockerfile.e2e` — Ruby 3.4 + JDK 21 runtime with vendored gems, pre-built JVM artifacts, and Gradle wrapper
+- `Dockerfile.e2e` — Ruby 3.4 + JDK 21 runtime with vendored gems, pre-built JVM artifacts, Gradle wrapper, and LPC adapter binary
 - `TestServer` harness — builds musl binary + JVM JARs, creates Docker image, boots PG + mud-driver containers, generates config, polls for readiness, provides cookie-enabled HTTP client
 
 **Test suites:**
@@ -439,6 +580,7 @@ A dedicated crate that runs the full application stack inside Docker containers.
 | `ai_streaming.rs` | AI streaming via wiremock mock, provider toggle, custom provider CRUD |
 | `spa_build.rs` | SPA build pipeline (npm install + vite build) |
 | `jvm_adapter.rs` | JVM adapter connect, template registration, area creation from kotlin:ktor template, Gradle build + area load, Flyway migrations, Ktor API backend proxy |
+| `lpc_adapter.rs` | LPC adapter connect, multi-language handshake, rust/lpc template registration, area creation from templates, .so module compilation, hot-reload |
 
 Run with: `just test-e2e` or `cargo test -p mud-e2e`
 
@@ -478,6 +620,11 @@ adapters:
     enabled: true
     command: "java"
     adapter_path: "-jar adapters/jvm/launcher.jar"
+  lpc:
+    enabled: true
+    command: "adapters/lpc/target/release/mud-adapter-lpc"
+    adapter_path: "adapters/lpc"
+    languages: ["lpc", "rust"]
 ai:
   enabled: true
 ```
@@ -487,6 +634,8 @@ ai:
 ## Key Dependencies
 
 **Rust**: tokio, axum, sqlx (PostgreSQL), git2, russh, rmp-serde, bcrypt, aes-gcm, reqwest, tera (templates), tracing
+
+**LPC/Rust adapter**: lpc-vm (DGD-compatible LPC VM), libloading (`.so` dlopen/dlclose), axum (web modules)
 
 **Ruby**: roda 3, rack 3, puma 6, msgpack 1.7, sequel, bcrypt
 
