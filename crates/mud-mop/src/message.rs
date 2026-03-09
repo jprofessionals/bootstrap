@@ -20,6 +20,20 @@ pub enum Value {
     Map(HashMap<String, Value>),
 }
 
+/// Cache policy hint returned with CallResult responses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CachePolicy {
+    /// Never cache — always call through to the adapter.
+    #[serde(rename = "volatile")]
+    Volatile,
+    /// Safe to cache until explicitly invalidated.
+    #[serde(rename = "cacheable")]
+    Cacheable,
+    /// Cache with a time-to-live in seconds.
+    #[serde(rename = "ttl")]
+    Ttl(u64),
+}
+
 /// Messages sent from the driver to a language adapter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -91,6 +105,14 @@ pub enum DriverMessage {
         action: String,
     },
 
+    /// Ask the adapter to reload specific changed files within an area (surgical reload).
+    #[serde(rename = "reload_program")]
+    ReloadProgram {
+        area_id: AreaId,
+        path: String,
+        files: Vec<String>,
+    },
+
     /// Ask the adapter to provide web template data for an area.
     #[serde(rename = "get_web_data")]
     GetWebData {
@@ -120,7 +142,12 @@ pub enum AdapterMessage {
 
     /// Successful result from a `Call` request.
     #[serde(rename = "call_result")]
-    CallResult { request_id: u64, result: Value },
+    CallResult {
+        request_id: u64,
+        result: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache: Option<CachePolicy>,
+    },
 
     /// Error result from a `Call` request.
     #[serde(rename = "call_error")]
@@ -153,11 +180,17 @@ pub enum AdapterMessage {
     Pong { seq: u64 },
 
     /// Initial handshake identifying the adapter.
+    ///
+    /// The `languages` field allows an adapter to handle multiple language
+    /// types (e.g. the LPC adapter handles both "lpc" and "rust" areas).
+    /// When empty, only the primary `language` is registered.
     #[serde(rename = "handshake")]
     Handshake {
         adapter_name: String,
         language: String,
         version: String,
+        #[serde(default)]
+        languages: Vec<String>,
     },
 
     /// Generic request from adapter to driver for portal operations.
@@ -168,6 +201,28 @@ pub enum AdapterMessage {
         request_id: u64,
         action: String,
         params: Value,
+    },
+
+    /// Confirm a program was successfully reloaded, with new version number.
+    #[serde(rename = "program_reloaded")]
+    ProgramReloaded {
+        area_id: AreaId,
+        path: String,
+        version: u64,
+    },
+
+    /// Report a program reload failure; old version retained.
+    #[serde(rename = "program_reload_error")]
+    ProgramReloadError {
+        area_id: AreaId,
+        path: String,
+        error: String,
+    },
+
+    /// Notify all adapters that cached values for these objects are stale.
+    #[serde(rename = "invalidate_cache")]
+    InvalidateCache {
+        object_ids: Vec<ObjectId>,
     },
 }
 
@@ -193,10 +248,64 @@ mod tests {
             adapter_name: "mud-adapter-ruby".into(),
             language: "ruby".into(),
             version: "0.1.0".into(),
+            languages: vec![],
         };
         let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
         let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn adapter_handshake_with_languages() {
+        let msg = AdapterMessage::Handshake {
+            adapter_name: "mud-adapter-lpc".into(),
+            language: "lpc".into(),
+            version: "0.1.0".into(),
+            languages: vec!["lpc".into(), "rust".into()],
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
+        let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(msg, decoded);
+        match decoded {
+            AdapterMessage::Handshake { languages, .. } => {
+                assert_eq!(languages, vec!["lpc", "rust"]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn adapter_handshake_without_languages_defaults_to_empty() {
+        // Simulate a legacy adapter that omits the `languages` field entirely
+        // from the wire format. Build a MessagePack map manually with only the
+        // fields a pre-languages adapter would send.
+        #[derive(Serialize)]
+        #[serde(tag = "type")]
+        enum LegacyAdapter {
+            #[serde(rename = "handshake")]
+            Handshake {
+                adapter_name: String,
+                language: String,
+                version: String,
+            },
+        }
+
+        let legacy = LegacyAdapter::Handshake {
+            adapter_name: "mud-adapter-ruby".into(),
+            language: "ruby".into(),
+            version: "0.1.0".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&legacy).expect("serialize legacy");
+        // Deserialize as the real AdapterMessage — languages should default to empty
+        let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        match decoded {
+            AdapterMessage::Handshake { languages, adapter_name, language, .. } => {
+                assert!(languages.is_empty(), "languages should default to empty vec");
+                assert_eq!(adapter_name, "mud-adapter-ruby");
+                assert_eq!(language, "ruby");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
@@ -390,6 +499,7 @@ mod tests {
         let msg = AdapterMessage::CallResult {
             request_id: 5,
             result: Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            cache: None,
         };
         let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
         let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");

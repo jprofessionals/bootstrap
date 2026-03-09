@@ -92,14 +92,24 @@ impl AdapterManager {
             }
         }
 
+        if let Some(ref lpc) = config.adapters.lpc {
+            if lpc.enabled {
+                let socket_str = self.socket_path.to_string_lossy().to_string();
+                let world_path = config.world.resolved_path();
+                self.spawn_adapter(&lpc.command, &lpc.adapter_path, &socket_str, &world_path)?;
+                info!("spawned LPC adapter process");
+            }
+        }
+
         Ok(listener)
     }
 
     /// Accept an incoming adapter connection on the listener.
     ///
     /// Reads the initial handshake message, sets up bidirectional
-    /// communication, and returns the language identifier string.
-    pub async fn accept_connection(&mut self, listener: &UnixListener) -> Result<String> {
+    /// communication, and returns the primary language plus any additional
+    /// languages the adapter can handle.
+    pub async fn accept_connection(&mut self, listener: &UnixListener) -> Result<(String, Vec<String>)> {
         let (stream, _addr) = listener.accept().await.context("accepting adapter connection")?;
         let (mut reader, writer) = stream.into_split();
 
@@ -108,12 +118,13 @@ impl AdapterManager {
             .await
             .context("reading handshake from adapter")?;
 
-        let (adapter_name, language, version) = match first_msg {
+        let (adapter_name, language, version, languages) = match first_msg {
             AdapterMessage::Handshake {
                 adapter_name,
                 language,
                 version,
-            } => (adapter_name, language, version),
+                languages,
+            } => (adapter_name, language, version, languages),
             other => {
                 bail!(
                     "expected Handshake as first message, got {:?}",
@@ -125,6 +136,7 @@ impl AdapterManager {
         info!(
             adapter_name,
             language,
+            ?languages,
             version,
             "adapter connected"
         );
@@ -148,8 +160,19 @@ impl AdapterManager {
             }
         });
 
-        self.adapters.insert(language.clone(), conn);
-        Ok(language)
+        self.adapters.insert(language.clone(), conn.clone());
+
+        // Register additional language aliases pointing to the same connection.
+        let mut additional = Vec::new();
+        for lang in &languages {
+            if lang != &language && !self.adapters.contains_key(lang) {
+                self.adapters.insert(lang.clone(), conn.clone());
+                additional.push(lang.clone());
+                info!(primary = %language, alias = %lang, "registered language alias");
+            }
+        }
+
+        Ok((language, additional))
     }
 
     /// Send a message to a specific adapter identified by language.

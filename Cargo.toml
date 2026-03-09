@@ -5,6 +5,8 @@ members = [
     "crates/mud-driver",
     "crates/mud-mop",
     "crates/mud-e2e",
+    "crates/lpc-vm",
+    "adapters/lpc",
 ]
 
 [workspace.dependencies]

@@ -84,7 +84,12 @@ pub struct Server {
     adapter_manager: AdapterManager,
     sessions: SessionState,
     /// Language identifiers returned by adapter handshakes (e.g. "ruby", "kotlin").
+    /// Includes both primary and alias languages for routing.
     adapter_languages: Vec<String>,
+    /// Primary language per adapter (one per process), used for broadcast
+    /// operations like `send_configure` to avoid sending duplicates when an
+    /// adapter handles multiple languages.
+    adapter_primary_languages: Vec<String>,
     /// Database manager, initialized when `database.admin_password` is configured.
     #[allow(dead_code)]
     db_manager: Option<DatabaseManager>,
@@ -155,6 +160,7 @@ impl Server {
             adapter_manager,
             sessions: SessionState::new(),
             adapter_languages: Vec::new(),
+            adapter_primary_languages: Vec::new(),
             db_manager: None,
             player_store: None,
             repo_manager: None,
@@ -198,7 +204,7 @@ impl Server {
         info!(expected_adapters, "Waiting for adapters (30s timeout)...");
 
         for i in 0..expected_adapters {
-            let language = tokio::time::timeout(
+            let (language, additional) = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 self.adapter_manager.accept_connection(&listener),
             )
@@ -211,7 +217,14 @@ impl Server {
             .context("accepting adapter connection")?;
 
             info!(language, adapter = i + 1, total = expected_adapters, "Adapter connected");
+            self.adapter_primary_languages.push(language.clone());
             self.adapter_languages.push(language);
+            for lang in additional {
+                if !self.adapter_languages.contains(&lang) {
+                    info!(alias = %lang, "Registered additional adapter language");
+                    self.adapter_languages.push(lang);
+                }
+            }
         }
 
         // -----------------------------------------------------------------
@@ -411,7 +424,8 @@ impl Server {
 
     /// Determine the adapter language for a given area by reading its `mud.yaml`.
     ///
-    /// If `mud.yaml` exists and specifies a JVM framework (anything other than
+    /// If `mud.yaml` exists and specifies `language: lpc`, the area belongs to
+    /// the "lpc" adapter. If it specifies a JVM framework (anything other than
     /// `none`), the area belongs to the "kotlin" adapter. Otherwise it defaults
     /// to the primary language (Ruby).
     fn language_for_area(&self, area_path: &str) -> String {
@@ -419,14 +433,37 @@ impl Server {
         match std::fs::read_to_string(&yaml_path) {
             Ok(contents) => {
                 if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&contents) {
+                    // Check for explicit language field first.
+                    if let Some(language) = yaml.get("language").and_then(|v| v.as_str()) {
+                        if language == "lpc"
+                            && self.adapter_languages.iter().any(|l| l == "lpc")
+                        {
+                            info!(path = %area_path, %language, "Routing area to lpc adapter");
+                            return "lpc".to_string();
+                        }
+                        if language == "rust"
+                            && self.adapter_languages.iter().any(|l| l == "rust")
+                        {
+                            info!(path = %area_path, %language, "Routing area to rust adapter");
+                            return "rust".to_string();
+                        }
+                    }
+
+                    // Check for framework field.
                     if let Some(framework) = yaml.get("framework").and_then(|v| v.as_str()) {
+                        if framework == "lpc"
+                            && self.adapter_languages.iter().any(|l| l == "lpc")
+                        {
+                            info!(path = %area_path, %framework, "Routing area to lpc adapter");
+                            return "lpc".to_string();
+                        }
                         if framework != "none"
                             && self.adapter_languages.iter().any(|l| l == "kotlin")
                         {
                             info!(path = %area_path, %framework, "Routing area to kotlin adapter");
                             return "kotlin".to_string();
                         }
-                        info!(path = %area_path, %framework, "Area uses ruby (framework=none or no kotlin adapter)");
+                        info!(path = %area_path, %framework, "Area uses ruby (framework=none or no matching adapter)");
                     }
                 }
             }
@@ -488,17 +525,23 @@ impl Server {
     }
 
     /// Accept an adapter connection on the given listener, storing the
-    /// adapter language for subsequent session calls.
+    /// adapter language(s) for subsequent session calls.
     pub async fn accept_adapter(
         &mut self,
         listener: &tokio::net::UnixListener,
     ) -> Result<String> {
-        let language = self
+        let (language, additional) = self
             .adapter_manager
             .accept_connection(listener)
             .await
             .context("accepting adapter connection")?;
+        self.adapter_primary_languages.push(language.clone());
         self.adapter_languages.push(language.clone());
+        for lang in additional {
+            if !self.adapter_languages.contains(&lang) {
+                self.adapter_languages.push(lang);
+            }
+        }
         Ok(language)
     }
 
@@ -533,8 +576,10 @@ impl Server {
 
     /// Send a Configure message to all connected adapters with the stdlib DB URL.
     /// Each adapter uses this to connect and run its own schema migrations.
+    /// Uses primary languages only to avoid sending duplicates when an adapter
+    /// handles multiple language aliases.
     pub async fn send_configure(&self, stdlib_db_url: String) -> Result<()> {
-        for lang in &self.adapter_languages {
+        for lang in &self.adapter_primary_languages {
             self.adapter_manager
                 .send_to(lang, DriverMessage::Configure { stdlib_db_url: stdlib_db_url.clone() })
                 .await
@@ -816,6 +861,7 @@ impl Server {
             AdapterMessage::CallResult {
                 request_id,
                 result,
+                cache: _,
             } => {
                 if !self.complete_rpc(request_id, Ok(result)) {
                     warn!(request_id, "received CallResult for unknown RPC request");
@@ -1388,6 +1434,51 @@ impl Server {
                         }
                         Err(e) => {
                             warn!(overlay = %overlay_name, error = %e, "Failed to read JVM overlay");
+                        }
+                    }
+                }
+                drop(existing);
+
+                if !to_insert.is_empty() {
+                    let mut templates = self.area_templates.write().await;
+                    for (name, files) in to_insert {
+                        let count = files.len();
+                        info!(name = %name, count, "Disk-scanned area template registered");
+                        templates.insert(name, files);
+                    }
+                }
+            }
+        }
+
+        // LPC/Rust templates: each subdirectory is a self-contained template
+        let lpc_templates = std::path::Path::new("adapters/lpc/templates/area");
+
+        if lpc_templates.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(lpc_templates) {
+                let existing = self.area_templates.read().await;
+                let mut to_insert = Vec::new();
+
+                for entry in entries.flatten() {
+                    if !entry.path().is_dir() {
+                        continue;
+                    }
+                    let template_name = entry.file_name().to_string_lossy().to_string();
+
+                    // Skip if adapter already registered this template
+                    if existing.contains_key(&template_name) {
+                        continue;
+                    }
+
+                    match collect_template_files(&entry.path()) {
+                        Ok(files) => {
+                            to_insert.push((template_name, files));
+                        }
+                        Err(e) => {
+                            warn!(
+                                template = %entry.file_name().to_string_lossy(),
+                                error = %e,
+                                "Failed to read LPC/Rust template"
+                            );
                         }
                     }
                 }

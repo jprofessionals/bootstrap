@@ -35,6 +35,7 @@ async fn connect_fake_adapter(
         adapter_name: "test-adapter".into(),
         language: "ruby".into(),
         version: "1.0.0".into(),
+        languages: vec![],
     };
     write_adapter_message(&mut write_half, &handshake)
         .await
@@ -100,7 +101,7 @@ async fn setup_connected_adapter() -> (
     let sp = socket_path.clone();
     let connect_handle = tokio::spawn(async move { connect_fake_adapter(&sp).await });
 
-    let language = timeout(TEST_TIMEOUT, manager.accept_connection(&listener))
+    let (language, _additional) = timeout(TEST_TIMEOUT, manager.accept_connection(&listener))
         .await
         .expect("accept timed out")
         .expect("accept failed");

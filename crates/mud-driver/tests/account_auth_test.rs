@@ -130,6 +130,7 @@ async fn build_harness() -> TestHarness {
             adapter_name: "test-adapter".into(),
             language: "ruby".into(),
             version: "1.0.0".into(),
+            languages: vec![],
         };
         write_adapter_message(&mut write_half, &handshake)
             .await
