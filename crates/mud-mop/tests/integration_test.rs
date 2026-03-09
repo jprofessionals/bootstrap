@@ -53,6 +53,7 @@ async fn unix_socket_adapter_message_round_trip() {
         adapter_name: "test-adapter".into(),
         language: "ruby".into(),
         version: "1.0.0".into(),
+        languages: vec![],
     };
 
     let sent = msg.clone();
@@ -249,6 +250,7 @@ async fn large_payload_transfers_correctly() {
     let msg = AdapterMessage::CallResult {
         request_id: 99,
         result: Value::String(large_text.clone()),
+        cache: None,
     };
 
     let sent = msg.clone();
@@ -497,6 +499,7 @@ async fn all_adapter_message_variants_round_trip_over_socket() {
         AdapterMessage::CallResult {
             request_id: 1,
             result: Value::Int(42),
+            cache: None,
         },
         AdapterMessage::CallError {
             request_id: 2,
@@ -525,6 +528,7 @@ async fn all_adapter_message_variants_round_trip_over_socket() {
             adapter_name: "test".into(),
             language: "ruby".into(),
             version: "1.0.0".into(),
+            languages: vec![],
         },
     ];
 

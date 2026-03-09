@@ -33,14 +33,16 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
         .args(["network", "prune", "-f", "--filter", "label!=keep"])
         .status();
 
-    // Build static musl binary (no-op if already up to date)
-    log(t0, "Building mud-driver (musl release)...");
+    // Build static musl binaries (no-op if already up to date)
+    log(t0, "Building mud-driver + mud-adapter-lpc (musl release)...");
     let status = std::process::Command::new("cargo")
         .args([
             "build",
             "--release",
             "--bin",
             "mud-driver",
+            "--bin",
+            "mud-adapter-lpc",
             "--target",
             "x86_64-unknown-linux-musl",
         ])
@@ -48,7 +50,7 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
         .status()
         .expect("failed to run cargo build");
     assert!(status.success(), "cargo build --release --target musl failed");
-    log(t0, "Musl binary built");
+    log(t0, "Musl binaries built");
 
     // Build JVM adapter: launcher JAR and publish MOP/stdlib to local Maven
     log(t0, "Building JVM adapter...");
@@ -135,16 +137,21 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start() -> Self {
-        Self::start_with_adapters(true, true).await
+        Self::start_with_adapters(true, true, false).await
     }
 
     /// Start a server with only the Ruby adapter enabled (no JVM adapter process).
     /// JVM templates should still be available via disk scanning.
     pub async fn start_ruby_only() -> Self {
-        Self::start_with_adapters(true, false).await
+        Self::start_with_adapters(true, false, false).await
     }
 
-    pub async fn start_with_adapters(ruby_enabled: bool, jvm_enabled: bool) -> Self {
+    /// Start a server with Ruby and LPC adapters enabled (no JVM).
+    pub async fn start_with_lpc() -> Self {
+        Self::start_with_adapters(true, true, true).await
+    }
+
+    pub async fn start_with_adapters(ruby_enabled: bool, jvm_enabled: bool, lpc_enabled: bool) -> Self {
         let t0 = Instant::now();
 
         // Ensure image is built
@@ -200,6 +207,10 @@ adapters:
     enabled: {jvm_enabled}
     command: "java"
     adapter_path: "adapters/jvm/launcher.jar"
+  lpc:
+    enabled: {lpc_enabled}
+    command: "mud-adapter-lpc"
+    adapter_path: "adapters/lpc"
 "#
         );
 

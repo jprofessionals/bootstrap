@@ -52,6 +52,7 @@ async fn connect_fake_adapter(
         adapter_name: adapter_name.into(),
         language: language.into(),
         version: version.into(),
+        languages: vec![],
     };
     write_adapter_message(&mut write_half, &handshake)
         .await
@@ -76,11 +77,12 @@ async fn accept_connection_and_handshake() {
 
     // Manager accepts the connection
     let result = timeout(TEST_TIMEOUT, manager.accept_connection(&listener)).await;
-    let language = result
+    let (language, additional) = result
         .expect("accept timed out")
         .expect("accept failed");
 
     assert_eq!(language, "ruby");
+    assert!(additional.is_empty());
     assert!(manager.has_adapter("ruby"));
     assert!(!manager.has_adapter("python"));
 
@@ -105,7 +107,7 @@ async fn route_driver_message_to_adapter() {
     });
 
     // Accept the connection
-    let language = timeout(TEST_TIMEOUT, manager.accept_connection(&listener))
+    let (language, _additional) = timeout(TEST_TIMEOUT, manager.accept_connection(&listener))
         .await
         .expect("accept timed out")
         .expect("accept failed");
@@ -466,6 +468,7 @@ async fn call_and_call_result_flow() {
     let result_msg = AdapterMessage::CallResult {
         request_id: 7,
         result: Value::String("A dark, musty tavern.".into()),
+        cache: None,
     };
     write_adapter_message(&mut adapter_write, &result_msg)
         .await

@@ -1,0 +1,2 @@
+language: rust
+web_mode: spa

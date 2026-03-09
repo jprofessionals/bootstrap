@@ -231,6 +231,7 @@ impl Default for DatabaseConfig {
 pub struct AdaptersConfig {
     pub ruby: Option<RubyAdapterConfig>,
     pub jvm: Option<JvmAdapterConfig>,
+    pub lpc: Option<LpcAdapterConfig>,
     pub default_template: Option<String>,
 }
 
@@ -248,6 +249,24 @@ impl Default for JvmAdapterConfig {
             enabled: false,
             command: "java".into(),
             adapter_path: "adapters/jvm/launcher/build/libs/launcher.jar".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LpcAdapterConfig {
+    pub enabled: bool,
+    pub command: String,
+    pub adapter_path: String,
+}
+
+impl Default for LpcAdapterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: "adapters/lpc/target/release/mud-adapter-lpc".into(),
+            adapter_path: "adapters/lpc".into(),
         }
     }
 }

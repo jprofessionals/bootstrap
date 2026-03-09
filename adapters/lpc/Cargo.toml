@@ -1,0 +1,16 @@
+[package]
+name = "mud-adapter-lpc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lpc-vm = { path = "../../crates/lpc-vm" }
+mud-core = { path = "../../crates/mud-core" }
+mud-mop = { path = "../../crates/mud-mop" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }

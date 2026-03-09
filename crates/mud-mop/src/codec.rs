@@ -132,6 +132,7 @@ mod tests {
             adapter_name: "test".into(),
             language: "ruby".into(),
             version: "0.1.0".into(),
+            languages: vec![],
         };
 
         let mut buf = Vec::new();

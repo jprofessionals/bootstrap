@@ -7,6 +7,7 @@ use tracing::{debug, error, warn};
 
 /// Manages bidirectional communication with a single language adapter over a
 /// Unix socket connection.
+#[derive(Clone)]
 #[allow(dead_code)]
 pub struct AdapterConnection {
     tx: mpsc::Sender<DriverMessage>,
