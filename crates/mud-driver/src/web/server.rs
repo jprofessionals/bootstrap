@@ -21,11 +21,13 @@ use crate::git::workspace::Workspace;
 use crate::mop_rpc::MopRpcClient;
 use crate::persistence::ai_key_store::AiKeyStore;
 use crate::persistence::player_store::PlayerStore;
+use crate::server::AreaTemplates;
 use crate::web::ai::ai_routes;
 use crate::web::build_log::BuildLog;
 use crate::web::build_manager::BuildManager;
 use crate::web::editor_files::editor_file_routes;
 use crate::web::project::{build_log_routes, project_routes};
+use crate::web::repos::repos_routes;
 use crate::web::skills::SkillsService;
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,9 @@ pub struct AppState {
     pub build_manager: Option<Arc<BuildManager>>,
     pub build_log: Arc<BuildLog>,
     pub mop_rpc: Option<MopRpcClient>,
+    pub area_web_sockets: super::project::AreaWebSockets,
+    pub area_templates: AreaTemplates,
+    pub loaded_areas: std::sync::Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -73,19 +78,27 @@ impl WebServer {
         // These must be added via nest_service since the main router uses AppState.
         let editor = editor_file_routes(world_path.clone(), self.state.mop_rpc.clone());
         let builder = build_log_routes(self.state.build_log.clone());
+        let repos = repos_routes(
+            self.state.repo_manager.clone(),
+            self.state.workspace.clone(),
+            self.state.area_templates.clone(),
+        );
         let project = project_routes(
             world_path,
             build_cache_path,
             self.state.build_log.clone(),
             self.state.mop_rpc.clone(),
             self.state.portal_socket.clone(),
+            self.state.area_web_sockets.clone(),
         );
 
         let app = Router::new()
             .route("/", get(welcome_handler))
+            .route("/api/areas/status", get(area_status_handler))
             .nest("/api/ai", ai_routes())
             .nest_service("/api/editor", editor)
             .nest_service("/api/builder", builder)
+            .nest_service("/api/repos", repos)
             .nest_service("/project", project)
             .fallback(proxy_handler)
             .with_state(self.state)
@@ -110,6 +123,15 @@ impl WebServer {
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+async fn area_status_handler(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
+    let loaded: Vec<String> = state.loaded_areas.read().await.iter().cloned().collect();
+    let web_sockets: Vec<String> = state.area_web_sockets.read().await.keys().cloned().collect();
+    axum::Json(serde_json::json!({
+        "loaded_areas": loaded,
+        "web_sockets": web_sockets,
+    }))
+}
 
 async fn welcome_handler(State(state): State<AppState>) -> Html<String> {
     let ctx = tera::Context::new();

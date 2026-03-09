@@ -230,6 +230,26 @@ impl Default for DatabaseConfig {
 #[serde(default)]
 pub struct AdaptersConfig {
     pub ruby: Option<RubyAdapterConfig>,
+    pub jvm: Option<JvmAdapterConfig>,
+    pub default_template: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct JvmAdapterConfig {
+    pub enabled: bool,
+    pub command: String,
+    pub adapter_path: String,
+}
+
+impl Default for JvmAdapterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: "java".into(),
+            adapter_path: "adapters/jvm/launcher/build/libs/launcher.jar".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -492,6 +512,48 @@ adapters:
         let cfg = Config::from_yaml(yaml).unwrap();
         let ruby = cfg.adapters.ruby.unwrap();
         assert!(!ruby.enabled);
+    }
+
+    #[test]
+    fn parses_default_template() {
+        let yaml = r#"
+adapters:
+  default_template: "kotlin:ktor"
+  ruby:
+    enabled: true
+"#;
+        let cfg = Config::from_yaml(yaml).unwrap();
+        assert_eq!(cfg.adapters.default_template.as_deref(), Some("kotlin:ktor"));
+    }
+
+    #[test]
+    fn parses_jvm_adapter() {
+        let yaml = r#"
+adapters:
+  jvm:
+    enabled: true
+    command: /usr/bin/java
+    adapter_path: /opt/mud/launcher.jar
+"#;
+        let cfg = Config::from_yaml(yaml).unwrap();
+        let jvm = cfg.adapters.jvm.unwrap();
+        assert!(jvm.enabled);
+        assert_eq!(jvm.command, "/usr/bin/java");
+        assert_eq!(jvm.adapter_path, "/opt/mud/launcher.jar");
+    }
+
+    #[test]
+    fn default_jvm_adapter_config() {
+        let cfg = JvmAdapterConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.command, "java");
+    }
+
+    #[test]
+    fn adapters_config_default_has_no_jvm() {
+        let cfg = AdaptersConfig::default();
+        assert!(cfg.jvm.is_none());
+        assert!(cfg.default_template.is_none());
     }
 
     #[test]

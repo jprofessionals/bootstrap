@@ -4,8 +4,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
+# Install JDK 21 for the JVM adapter (Eclipse Temurin from Adoptium)
+RUN apt-get update && apt-get install -y wget apt-transport-https gnupg && \
+    wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" > /etc/apt/sources.list.d/adoptium.list && \
+    apt-get update && apt-get install -y temurin-21-jdk && \
+    apt-get remove -y wget gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+ENV PATH="$JAVA_HOME/bin:$PATH"
+
 WORKDIR /app
 COPY target/x86_64-unknown-linux-musl/release/mud-driver /usr/local/bin/mud-driver
+
+# Ruby adapter
 COPY adapters/ruby/ adapters/ruby/
 
 ENV BUNDLE_GEMFILE=/app/adapters/ruby/Gemfile
@@ -13,6 +24,22 @@ ENV BUNDLE_PATH=/app/adapters/ruby/vendor/bundle
 ENV BUNDLE_WITHOUT=development:test
 
 RUN cd adapters/ruby && bundle install
+
+# JVM adapter: launcher JAR + stdlib templates + Gradle wrapper for area builds
+COPY adapters/jvm/launcher/build/libs/launcher.jar adapters/jvm/launcher.jar
+COPY adapters/jvm/stdlib/templates/ adapters/jvm/stdlib/templates/
+COPY adapters/jvm/gradle/ adapters/jvm/gradle/
+COPY adapters/jvm/gradlew adapters/jvm/gradlew
+RUN chmod +x adapters/jvm/gradlew
+
+# Pre-publish MOP and stdlib JARs to local Maven so area builds can resolve them
+COPY adapters/jvm/local-m2/ /root/.m2/repository/
+
+# Set shared Gradle wrapper path for area builds
+ENV MUD_GRADLEW=/app/adapters/jvm/gradlew
+
+# Pre-warm Gradle distribution cache (downloads Gradle 9.3.1 once during image build)
+RUN cd adapters/jvm && ./gradlew --version --no-daemon
 
 EXPOSE 8080 2222
 

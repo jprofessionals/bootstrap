@@ -8,6 +8,7 @@ db_port := "5432"
 db_container := "mud-postgres"
 config_file := "config/server.yml"
 ruby_adapter_dir := "adapters/ruby"
+jvm_adapter_dir := "adapters/jvm"
 bundle := env("BUNDLE", `which bundle 2>/dev/null || echo "$HOME/.local/share/gem/ruby/3.4.0/bin/bundle"`)
 
 # Default: list available recipes
@@ -201,6 +202,22 @@ test-db: db-start
 # Run Ruby adapter tests
 test-ruby:
     cd {{ruby_adapter_dir}} && {{bundle}} exec ruby test/portal_base_app_test.rb
+
+# Run JVM adapter tests (Gradle)
+test-jvm:
+    cd {{jvm_adapter_dir}} && ./gradlew test
+
+# Build the JVM adapter (compile only)
+build-jvm:
+    cd {{jvm_adapter_dir}} && ./gradlew build
+
+# Build the JVM launcher fat JAR
+build-jvm-jar:
+    cd {{jvm_adapter_dir}} && ./gradlew :launcher:jar
+
+# Clean JVM adapter build artifacts
+clean-jvm:
+    cd {{jvm_adapter_dir}} && ./gradlew clean
 
 # Show test count summary
 test-count:

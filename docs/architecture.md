@@ -1,6 +1,6 @@
 # MUD Driver Architecture
 
-A multi-user dungeon platform built as a Rust driver + Ruby adapter, communicating over the MOP protocol (MessagePack over Unix sockets).
+A multi-user dungeon platform built as a Rust driver with Ruby and JVM adapters, communicating over the MOP protocol (MessagePack over Unix sockets).
 
 ---
 
@@ -16,23 +16,24 @@ A multi-user dungeon platform built as a Rust driver + Ruby adapter, communicati
    │               │    ├─ ssh/ (russh)                       │
    │               │    ├─ web/ (axum, AI providers)          │
    │               │    └─ build/ (BuildManager, SPA builds)  │
-   │               └──────────────┬───────────────────────────┘
-   │                              │ MOP (Unix socket)
-   │  /project/* ─► driver       ▼
-   │  /api/builder/* ─► driver  ┌──────────────────────────────────────────┐
-   │  /api/editor/* ─► driver   │             Ruby Adapter                  │
-   │                            │                                          │
-   │                            │  client.rb (MOP client)                  │
-   │                            │    ├─ area_loader.rb (load game world)   │
-   │                            │    ├─ stdlib/ (game objects, commands)    │
-   │                            │    └─ portal/ (Roda web apps)            │
-   └──── proxy ────────────────►│         ├─ editor UI, git, builder UI    │
-                                │         ├─ account, play                  │
-                                │         └─ review (merge requests)        │
-                                └──────────────────────────────────────────┘
+   │               └──────────┬─────────────────┬─────────────┘
+   │                          │ MOP (Unix sock)  │ MOP (Unix sock)
+   │  /project/* ─► driver   ▼                  ▼
+   │  /api/builder/*  ┌────────────────┐  ┌────────────────────┐
+   │  /api/editor/*   │  Ruby Adapter  │  │   JVM Adapter      │
+   │                  │                │  │                    │
+   │                  │  client.rb     │  │  launcher.jar      │
+   │                  │  ├─ area_loader│  │  ├─ GradleBuilder  │
+   │                  │  ├─ stdlib/    │  │  ├─ AreaProcess    │
+   │                  │  └─ portal/    │  │  │  ├─ FlywayRunner│
+   └── proxy ────────►│    (Roda apps) │  │  │  └─ KtorWebSrv  │
+   └── proxy (tcp) ──►│               │  │  └─ mud-stdlib.jar  │
+                      └────────────────┘  └────────────────────┘
 ```
 
-**HTTP flow**: Axum handles `/project/*` (built SPA/template assets), `/api/builder/*` (build logs), `/api/editor/*` (file CRUD), `/api/ai/*`, and HTTP git directly. Portal pages and area API routes (`web_routes`/`web_app`) are reverse-proxied to the Ruby portal (Puma/Roda) over a Unix socket.
+**HTTP flow**: Axum handles `/project/*` (built SPA/template assets), `/api/builder/*` (build logs), `/api/editor/*` (file CRUD), `/api/ai/*`, and HTTP git directly. Portal pages and area API routes (`web_routes`/`web_app`) are reverse-proxied to the Ruby portal (Puma/Roda) over a Unix socket. JVM area API routes are proxied via TCP to the embedded Ktor web server.
+
+**Language-aware routing**: When an area is loaded or reloaded, the driver reads `mud.yaml` from the area's path to determine the `framework` field. If a framework is specified (e.g., `ktor`) and a Kotlin adapter is connected, the area is routed to the JVM adapter; otherwise it defaults to Ruby.
 
 ---
 
@@ -42,27 +43,29 @@ A multi-user dungeon platform built as a Rust driver + Ruby adapter, communicati
 
 Defined in `crates/mud-mop/`. Two message enums:
 
-**DriverMessage** (Rust → Ruby):
+**DriverMessage** (Rust → Adapter):
 - `LoadArea`, `ReloadArea`, `UnloadArea` — area lifecycle
 - `SessionStart`, `SessionInput`, `SessionEnd` — player sessions
 - `Configure` — send stdlib DB URL after boot
 - `RequestResponse`, `RequestError` — replies to adapter requests
 - `Ping`
 
-**AdapterMessage** (Ruby → Rust):
+**AdapterMessage** (Adapter → Rust):
 - `AreaLoaded`, `AreaError` — load results
 - `SessionOutput`, `SendMessage` — text to players
 - `DriverRequest` — generic request (action string + params map)
 - `Log` — structured area logging
 - `Handshake`, `Pong`
 
-The `DriverRequest`/`RequestResponse` pattern provides a synchronous RPC channel from Ruby to Rust (e.g., `mr_create`, `account_authenticate`, `provision_area_db`).
+The `DriverRequest`/`RequestResponse` pattern provides a synchronous RPC channel from adapters to Rust (e.g., `mr_create`, `account_authenticate`, `provision_area_db`, `set_area_template`, `register_area_web`).
 
-**MOP RPC from Rust to Ruby** (`MopRpcClient`):
+**MOP RPC from Rust to Adapter** (`MopRpcClient`):
 
 The driver also initiates RPC calls to the adapter for web-related decisions:
 - `CheckBuilderAccess` — ask the adapter whether a user has access to a given area (used by `/project/*` and `/api/builder/*` routes)
 - `GetWebData` — request template data from the area's `web_data` block (used for Tera template rendering)
+
+**Multi-adapter support**: The `AdapterManager` manages multiple concurrent adapter connections, each identified by a language (e.g., `ruby`, `kotlin`). Messages are routed to the correct adapter based on the area's language. The driver waits for all configured adapters to connect before booting.
 
 ---
 
@@ -161,7 +164,7 @@ git clone http://user:password@host:port/git/namespace/area.git
 The central coordinator. Key state:
 
 - `SessionState` — maps session IDs to output channels
-- `AdapterManager` — spawns and connects to Ruby adapter process
+- `AdapterManager` — spawns and connects to adapter processes (Ruby + JVM)
 - `DatabaseManager` — PostgreSQL pools and migrations
 - `PlayerStore` — account CRUD and authentication
 - `RepoManager` / `Workspace` — git operations (checkout, pull, commit, branch switching)
@@ -170,19 +173,21 @@ The central coordinator. Key state:
 - `MopRpcClient` — driver-initiated RPC to the adapter (access checks, template data)
 
 **Boot sequence** (`boot()`):
-1. Initialize databases (driver + stdlib), run migrations
-2. Send stdlib DB URL to adapter via `Configure` message
-3. Create `PlayerStore`, `RepoManager`, `Workspace`, `MergeRequestManager`
-4. Start adapter process, read handshake
+1. Start adapter processes (Ruby + JVM), wait for all handshakes
+2. Initialize databases (driver + stdlib), run migrations
+3. Send stdlib DB URL to adapters via `Configure` message
+4. Create `PlayerStore`, `RepoManager`, `Workspace`, `MergeRequestManager`
 5. Start SSH server
 6. Start HTTP server (axum + portal proxy)
-7. Load area template files
-8. Enter main message loop (dispatch MOP messages from adapter)
+7. Load area template files (from adapters + built-in)
+8. Enter main message loop (dispatch MOP messages from adapters)
 
 ### Web Server (`web/server.rs`)
 
 Axum routes:
-- `/project/<ns>/<area>/*` — serve built SPA assets or Tera-rendered templates
+- `/project/<ns>/<area>/*` — serve built SPA assets or Tera-rendered templates; proxy `/api/*` to JVM Ktor server for JVM areas
+- `/api/areas/status` — area status (loaded areas, registered web sockets)
+- `/api/repos/templates` — list available area templates (Ruby default + JVM overlays)
 - `/api/builder/<ns>/<area>/logs` — build log API (query params: `limit`, `level`)
 - `/api/editor/files/*` — editor file CRUD operations (read, write, list, delete)
 - `/api/ai/models` — list AI models (filtered by enabled providers)
@@ -254,6 +259,75 @@ Roda-based apps mounted under `BaseApp`:
 
 `BaseApp` provides shared helpers: `require_login!`, `current_account`, `mop_client`, `area_loader`, `render_view`.
 
+---
+
+## JVM Adapter Internals
+
+### Architecture
+
+The JVM adapter (`adapters/jvm/`) runs as a separate process (launcher) that connects to the driver via MOP. Each area runs in its own child JVM process, communicating with the launcher via Unix sockets.
+
+```
+Launcher (Main.kt)
+  ├─ MopClient → driver Unix socket
+  ├─ AreaProcessManager → manages child processes
+  │   └─ per area:
+  │       ├─ GradleBuilder (shadowJar)
+  │       └─ Child JVM (AreaProcess.main)
+  │           ├─ FlywayRunner (DB migrations)
+  │           ├─ AreaRuntime (classpath scanning)
+  │           └─ KtorWebServer (HTTP API)
+  └─ MopRouter → session-to-area routing
+```
+
+### Launcher (`launcher/`)
+
+The launcher process connects to the driver, sends handshake and area templates, then dispatches messages to the appropriate child process. It intercepts `register_area_web` messages from children and converts them to `driver_request` format for the driver to register TCP proxy endpoints.
+
+### Area Templates
+
+Templates are stored in `stdlib/templates/area/` with a base + overlay structure:
+
+- `base/` — shared files (MudArea.kt, Entrance.kt, build.gradle.kts, settings.gradle.kts, mud.yaml, web/templates/)
+- `overlays/ktor/` — Ktor-specific build.gradle.kts with Ktor dependencies + mud.yaml with `framework: ktor`
+- `overlays/quarkus/` — Quarkus overlay
+- `overlays/spring-boot/` — Spring Boot overlay
+
+Templates are sent to the driver via `set_area_template` driver requests during handshake. The driver merges base + overlay files and registers them as named templates (e.g., `kotlin:ktor`).
+
+### Area Build & Load Flow
+
+1. Driver sends `ReloadArea` to JVM adapter with area path + DB URL
+2. `GradleBuilder` runs `gradlew shadowJar` to produce a fat JAR
+3. Launcher spawns child JVM process (`AreaProcess.main`) with the built JAR on classpath
+4. Child runs `FlywayRunner` (Flyway migrations from `db/migrations/`, converting `postgres://` URLs to `jdbc:postgresql://`)
+5. `AreaRuntime` scans classpath for `@MudArea`, `@MudRoom`, `@MudItem`, `@MudNPC`, `@MudDaemon` annotations
+6. If framework is specified (e.g., `ktor`), starts `KtorWebServer` on a random TCP port
+7. Sends `register_area_web` to register TCP proxy with the driver
+8. Sends `area_loaded` to confirm successful load
+
+### KtorWebServer
+
+Embedded Ktor/Netty HTTP server started per-area. Serves:
+- `GET /api/status` — `{"status":"ok","area":"ns/name","framework":"ktor"}`
+- `GET /api/web-data` — template data from `@WebData`-annotated method
+
+The driver proxies `/project/<ns>/<area>/api/*` requests to this server via TCP.
+
+### Game Object Hierarchy (Kotlin)
+
+```
+Area (name, namespace, rooms, items, npcs, daemons)
+  ├── Room (title, description, exits)
+  ├── Item (title, description)
+  ├── NPC (title, description)
+  └── Daemon (title, description)
+```
+
+Annotated with `@MudArea`, `@MudRoom`, `@MudItem`, `@MudNPC`, `@MudDaemon`. Discovered via ClassGraph classpath scanning at runtime.
+
+---
+
 ### RackApp Base Class (`stdlib/web/rack_app.rb`)
 
 Roda subclass that areas can extend for custom web APIs. Provides `area_db` access (wired by BuilderApp from the container) and JSON/all-verbs plugins. Subclasses are auto-detected during `WebDataDSL` evaluation — if a new RackApp subclass is defined in `mud_web.rb`, the DSL auto-sets the `app_block`.
@@ -273,6 +347,8 @@ Areas serve web content at `/project/<ns>/<area>/`, hosted directly by the Rust 
 ---
 
 ## Area File Structure
+
+### Ruby Area
 
 ```
 <area>/
@@ -296,6 +372,25 @@ Areas serve web content at `/project/<ns>/<area>/`, hosted directly by the Rust 
         ├── main.js
         ├── package.json
         └── vite.config.js
+```
+
+### JVM (Kotlin) Area
+
+```
+<area>/
+├── mud.yaml                          # framework, web_mode, entry_class
+├── build.gradle.kts                  # Dependencies (mud-stdlib, Ktor, Flyway)
+├── settings.gradle.kts               # Project name
+├── agents.md                         # Platform API reference
+├── src/main/kotlin/
+│   ├── MudArea.kt                    # @MudArea entry point + @WebData
+│   └── rooms/
+│       └── Entrance.kt               # @MudRoom subclass
+├── db/
+│   └── migrations/                   # Flyway SQL migrations (V1__*.sql)
+└── web/
+    └── templates/
+        └── index.html                # Tera template
 ```
 
 ---
@@ -323,11 +418,11 @@ Fast tests in `crates/mud-driver/tests/` that don't need the full stack (all 192
 
 ### End-to-End Tests (`crates/mud-e2e/`)
 
-A dedicated crate that runs the full application stack inside Docker containers. Each test file boots its own isolated pair of containers (PostgreSQL + mud-driver with Ruby adapter) via testcontainers, and interacts only via HTTP — no mocks.
+A dedicated crate that runs the full application stack inside Docker containers. Each test file boots its own isolated pair of containers (PostgreSQL + mud-driver with Ruby + JVM adapters) via testcontainers, and interacts only via HTTP — no mocks.
 
 **Infrastructure:**
-- `Dockerfile.e2e` — multi-stage build: Rust binary compilation → Ruby 3.4 runtime with vendored gems
-- `TestServer` harness — creates a Docker network, boots PG + mud-driver containers, generates config, polls for readiness, provides cookie-enabled HTTP client
+- `Dockerfile.e2e` — Ruby 3.4 + JDK 21 runtime with vendored gems, pre-built JVM artifacts, and Gradle wrapper
+- `TestServer` harness — builds musl binary + JVM JARs, creates Docker image, boots PG + mud-driver containers, generates config, polls for readiness, provides cookie-enabled HTTP client
 
 **Test suites:**
 
@@ -343,6 +438,7 @@ A dedicated crate that runs the full application stack inside Docker containers.
 | `webapp_database.rs` | Sequel migrations, area DB provisioning, CRUD API |
 | `ai_streaming.rs` | AI streaming via wiremock mock, provider toggle, custom provider CRUD |
 | `spa_build.rs` | SPA build pipeline (npm install + vite build) |
+| `jvm_adapter.rs` | JVM adapter connect, template registration, area creation from kotlin:ktor template, Gradle build + area load, Flyway migrations, Ktor API backend proxy |
 
 Run with: `just test-e2e` or `cargo test -p mud-e2e`
 
@@ -378,6 +474,10 @@ adapters:
     enabled: true
     command: "ruby"
     adapter_path: "adapters/ruby/bin/mud-adapter"
+  jvm:
+    enabled: true
+    command: "java"
+    adapter_path: "-jar adapters/jvm/launcher.jar"
 ai:
   enabled: true
 ```
@@ -389,3 +489,5 @@ ai:
 **Rust**: tokio, axum, sqlx (PostgreSQL), git2, russh, rmp-serde, bcrypt, aes-gcm, reqwest, tera (templates), tracing
 
 **Ruby**: roda 3, rack 3, puma 6, msgpack 1.7, sequel, bcrypt
+
+**JVM (Kotlin)**: Gradle 9.3.1, Kotlin 2.1.20, Ktor 3.0.3 (Netty), Flyway 10.22, ClassGraph, junixsocket, Shadow plugin 8.3.6, SLF4J/Logback
