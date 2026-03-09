@@ -135,6 +135,16 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start() -> Self {
+        Self::start_with_adapters(true, true).await
+    }
+
+    /// Start a server with only the Ruby adapter enabled (no JVM adapter process).
+    /// JVM templates should still be available via disk scanning.
+    pub async fn start_ruby_only() -> Self {
+        Self::start_with_adapters(true, false).await
+    }
+
+    pub async fn start_with_adapters(ruby_enabled: bool, jvm_enabled: bool) -> Self {
         let t0 = Instant::now();
 
         // Ensure image is built
@@ -183,11 +193,11 @@ database:
   encryption_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
 adapters:
   ruby:
-    enabled: true
+    enabled: {ruby_enabled}
     command: "ruby"
     adapter_path: "adapters/ruby/bin/mud-adapter"
   jvm:
-    enabled: true
+    enabled: {jvm_enabled}
     command: "java"
     adapter_path: "adapters/jvm/launcher.jar"
 "#

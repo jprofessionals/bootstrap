@@ -310,7 +310,7 @@ module MudAdapter
           # TODO: Send DriverRequest to list repos via MOP
           repo_names = mop_client&.send_driver_request('repo_list', { owner: account }) || []
           repos = repo_names.map { |name| "#{account}/#{name}" }
-          render_full(:git_dashboard, server_name: server_name, repos: repos)
+          render_full(:git_dashboard, server_name: server_name, repos: repos, account: account)
         end
 
         def trigger_reload(namespace, name)

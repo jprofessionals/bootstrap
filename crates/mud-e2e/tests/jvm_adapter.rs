@@ -485,3 +485,61 @@ async fn jvm_ktor_api_backend() {
         .unwrap();
     assert_eq!(resp.status(), 200, "web-data endpoint should respond");
 }
+
+/// Test that JVM templates are available via disk scanning even when the
+/// JVM adapter process is not running.
+///
+/// The driver scans `adapters/jvm/stdlib/templates/area/` at boot time and
+/// registers kotlin:ktor, kotlin:quarkus, kotlin:spring-boot templates from
+/// the base + overlay directories on disk.  This allows builders to create
+/// JVM repos from the portal even if the JVM adapter is disabled.
+#[tokio::test]
+async fn jvm_templates_available_without_adapter() {
+    // Start server with only Ruby adapter — no JVM adapter process
+    let server = TestServer::start_ruby_only().await;
+
+    let resp = server
+        .client
+        .get(server.url("/api/repos/templates"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let names: Vec<&str> = body["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+
+    // Ruby "default" template should still be registered
+    assert!(
+        names.contains(&"default"),
+        "Ruby 'default' template should be registered, got: {names:?}"
+    );
+
+    // JVM templates should be registered via disk scanning
+    assert!(
+        names.contains(&"kotlin:ktor"),
+        "Disk-scanned 'kotlin:ktor' template should be available, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"kotlin:quarkus"),
+        "Disk-scanned 'kotlin:quarkus' template should be available, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"kotlin:spring-boot"),
+        "Disk-scanned 'kotlin:spring-boot' template should be available, got: {names:?}"
+    );
+
+    // Verify the templates have actual file content (not empty)
+    for template in body["templates"].as_array().unwrap() {
+        let name = template["name"].as_str().unwrap();
+        let count = template["file_count"].as_u64().unwrap();
+        assert!(
+            count > 0,
+            "Template '{name}' should have files, got file_count={count}"
+        );
+    }
+}

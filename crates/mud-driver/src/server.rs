@@ -215,6 +215,14 @@ impl Server {
         }
 
         // -----------------------------------------------------------------
+        // Scan disk-based templates so they're always available, even when
+        // an adapter isn't running.  Adapters that *are* connected already
+        // sent their templates during the handshake above, so we only
+        // insert templates that aren't already registered.
+        // -----------------------------------------------------------------
+        self.scan_disk_templates().await;
+
+        // -----------------------------------------------------------------
         // Database setup (optional — requires admin_password)
         // -----------------------------------------------------------------
         self.setup_database().await?;
@@ -1335,6 +1343,65 @@ impl Server {
         DriverMessage::RequestResponse {
             request_id,
             result: Value::Bool(true),
+        }
+    }
+
+    /// Scan adapter template directories on disk and register any templates
+    /// that weren't already provided by a running adapter.  This ensures
+    /// templates are available in the UI even when an adapter is disabled.
+    async fn scan_disk_templates(&self) {
+        // JVM templates: base + overlays in adapters/jvm/stdlib/templates/area/
+        let jvm_base = std::path::Path::new("adapters/jvm/stdlib/templates/area/base");
+        let jvm_overlays = std::path::Path::new("adapters/jvm/stdlib/templates/area/overlays");
+
+        if jvm_base.is_dir() && jvm_overlays.is_dir() {
+            let base_files = match collect_template_files(jvm_base) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!(error = %e, "Failed to read JVM base template");
+                    return;
+                }
+            };
+
+            if let Ok(entries) = std::fs::read_dir(jvm_overlays) {
+                let existing = self.area_templates.read().await;
+                let mut to_insert = Vec::new();
+
+                for entry in entries.flatten() {
+                    if !entry.path().is_dir() {
+                        continue;
+                    }
+                    let overlay_name = entry.file_name().to_string_lossy().to_string();
+                    let template_name = format!("kotlin:{overlay_name}");
+
+                    // Skip if adapter already registered this template
+                    if existing.contains_key(&template_name) {
+                        continue;
+                    }
+
+                    match collect_template_files(&entry.path()) {
+                        Ok(overlay_files) => {
+                            // Merge: base files + overlay files (overlay wins)
+                            let mut merged = base_files.clone();
+                            merged.extend(overlay_files);
+                            to_insert.push((template_name, merged));
+                        }
+                        Err(e) => {
+                            warn!(overlay = %overlay_name, error = %e, "Failed to read JVM overlay");
+                        }
+                    }
+                }
+                drop(existing);
+
+                if !to_insert.is_empty() {
+                    let mut templates = self.area_templates.write().await;
+                    for (name, files) in to_insert {
+                        let count = files.len();
+                        info!(name = %name, count, "Disk-scanned area template registered");
+                        templates.insert(name, files);
+                    }
+                }
+            }
         }
     }
 
@@ -2473,6 +2540,46 @@ fn get_int_param(params: &Value, key: &str) -> Option<i64> {
 ///
 /// Scans for directories matching `world_path/<namespace>/<name>/` and
 /// returns those that:
+/// Recursively collect all files under `dir` into a `HashMap<String, String>`
+/// where keys are relative paths and values are file contents (UTF-8).
+fn collect_template_files(
+    dir: &std::path::Path,
+) -> Result<HashMap<String, String>> {
+    let mut files = HashMap::new();
+    collect_files_recursive(dir, dir, &mut files)?;
+    Ok(files)
+}
+
+fn collect_files_recursive(
+    root: &std::path::Path,
+    current: &std::path::Path,
+    files: &mut HashMap<String, String>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(current)
+        .with_context(|| format!("reading dir: {}", current.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(root, &path, files)?;
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            // Skip .gitkeep and other dotfiles
+            if rel.contains("/.gitkeep") || rel == ".gitkeep" {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                files.insert(rel, content);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// - Are directories (not files)
 /// - Do not contain `@dev` in their name
 /// - Contain a `.meta.yml` file
