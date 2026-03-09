@@ -64,6 +64,8 @@ Defined in `crates/mud-mop/`. Two message enums:
 **AdapterMessage** (Adapter → Rust):
 - `AreaLoaded`, `AreaError` — load results
 - `SessionOutput`, `SendMessage` — text to players
+- `CallResult`, `CallError` — responses to driver `Call` RPC
+- `MoveObject` — request to relocate an object to another container/room
 - `DriverRequest` — generic request (action string + params map)
 - `ProgramReloaded`, `ProgramReloadError` — surgical reload results
 - `InvalidateCache` — notify stale cached values
@@ -98,6 +100,7 @@ Created and migrated by `persistence/database_manager.rs`. Tables:
 | `merge_request_approvals` | Approval records |
 | `ai_api_keys` | Encrypted API keys (AES-GCM) for AI providers, with per-provider `enabled` toggle |
 | `ai_custom_providers` | User-defined self-hosted LLM endpoints (name, base_url, api_mode, encrypted key, enabled) |
+| `ai_preferences` | Builder's default provider/model settings (account, default_provider, default_model) |
 
 ### Stdlib DB
 
@@ -105,7 +108,7 @@ Created by the driver, migrated by the Ruby adapter (`stdlib_migrator.rb`). Tabl
 
 | Table | Purpose |
 |-------|---------|
-| `players` | Accounts (username, bcrypt password_hash, role) |
+| `players` | Accounts (username, bcrypt password_hash, ssh_keys, role) |
 | `characters` | Player characters |
 | `sessions` | Active login sessions |
 | `access_tokens` | Personal access tokens (for git HTTP auth) |
@@ -187,13 +190,14 @@ The central coordinator. Key state:
 
 **Boot sequence** (`boot()`):
 1. Start adapter processes (Ruby, JVM, LPC/Rust), wait for all handshakes
-2. Initialize databases (driver + stdlib), run migrations
-3. Send stdlib DB URL to adapters via `Configure` message
-4. Create `PlayerStore`, `RepoManager`, `Workspace`, `MergeRequestManager`
-5. Start SSH server
-6. Start HTTP server (axum + portal proxy)
-7. Load area template files (from adapters + built-in)
-8. Enter main message loop (dispatch MOP messages from adapters)
+2. Scan disk templates (always available even without adapters)
+3. Initialize databases (driver + stdlib), run migrations
+4. Send stdlib DB URL to adapters via `Configure` message
+5. Create `PlayerStore`, `RepoManager`, `Workspace`, `MergeRequestManager`
+6. Start HTTP server (axum + portal proxy, conditional on `http.enabled`)
+7. Load areas
+8. Start SSH server
+9. Enter main message loop (dispatch MOP messages from adapters)
 
 ### Web Server (`web/server.rs`)
 
@@ -207,8 +211,11 @@ Axum routes:
 - `/api/ai/stream` — SSE streaming chat (supports `provider: "custom:<id>"`)
 - `/api/ai/apikey` — manage encrypted API keys (GET status, POST save, DELETE remove)
 - `/api/ai/provider/toggle` — enable/disable built-in providers
-- `/api/ai/custom-provider` — CRUD for self-hosted LLM endpoints
-- `/git/<ns>/<area>.git/*` — HTTP git protocol
+- `/api/ai/custom-provider` — CRUD for self-hosted LLM endpoints (list, create)
+- `/api/ai/custom-provider/{id}` — update/delete individual custom providers
+- `/api/ai/preferences` — get/set builder's default AI provider/model
+- `/api/ai/skills`, `/api/ai/skills/{name}` — AI skill definitions
+- `/git/<ns>/<repo>/*` — HTTP git protocol (info/refs, git-upload-pack, git-receive-pack)
 - `/*` — reverse proxy to Ruby portal Unix socket
 
 ### AI Providers (`web/ai_providers/`)
@@ -401,7 +408,7 @@ The LPC VM (`crates/lpc-vm/`) provides full DGD-compatible LPC language support:
 
 - **Pipeline**: `.c` source → Preprocessor → Parser → AST → Compiler → Bytecode → VM execution
 - **Object model**: Master objects, clones, light-weight objects, inheritance, dependency graph
-- **Kfun registry**: Built-in DGD kfuns (string, math, array, mapping, object, type, timing, crypto, connection, serialization, file I/O, misc) + stdlib-registered custom kfuns via `.so` modules
+- **Kfun registry**: Built-in DGD kfuns (string, math, array, mapping, object, type, timing, crypto, connection, serialization, file I/O, ASN, editor, parse, misc) + stdlib-registered custom kfuns via `.so` modules
 - **Resource control**: `rlimits(ticks; stack_depth)`, `atomic` transactional execution
 - **Special objects**: Auto object (`sys/auto.c`) inherited by all objects, Driver object (`sys/driver.c`) for VM↔driver interface
 
@@ -624,7 +631,8 @@ adapters:
     enabled: true
     command: "adapters/lpc/target/release/mud-adapter-lpc"
     adapter_path: "adapters/lpc"
-    languages: ["lpc", "rust"]
+tick:
+  interval: 1000
 ai:
   enabled: true
 ```

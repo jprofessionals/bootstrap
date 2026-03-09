@@ -26,6 +26,7 @@ use crate::web::ai::ai_routes;
 use crate::web::build_log::BuildLog;
 use crate::web::build_manager::BuildManager;
 use crate::web::editor_files::editor_file_routes;
+use crate::web::git_http::git_http_routes;
 use crate::web::project::{build_log_routes, project_routes};
 use crate::web::repos::repos_routes;
 use crate::web::skills::SkillsService;
@@ -99,6 +100,7 @@ impl WebServer {
             .nest_service("/api/editor", editor)
             .nest_service("/api/builder", builder)
             .nest_service("/api/repos", repos)
+            .nest("/git", git_http_routes())
             .nest_service("/project", project)
             .fallback(proxy_handler)
             .with_state(self.state)
