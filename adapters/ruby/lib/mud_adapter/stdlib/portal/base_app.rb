@@ -66,11 +66,23 @@ module MudAdapter
         end
 
         def require_login!
-          # TODO: Validate session via MOP DriverRequest to player_store
-          return if session['account'] && session['session_token']
+          unless session['account'] && session['session_token']
+            session.clear
+            request.redirect '/account/login'
+            return
+          end
 
-          session.clear
-          request.redirect '/account/login'
+          # Validate session token with the driver via MOP
+          if mop_client
+            valid = mop_client.send_driver_request('session_validate', {
+              account: session['account'],
+              token: session['session_token']
+            })
+            unless valid
+              session.clear
+              request.redirect '/account/login'
+            end
+          end
         end
 
         def require_builder!

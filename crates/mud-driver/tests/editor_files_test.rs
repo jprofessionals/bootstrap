@@ -27,7 +27,7 @@ fn setup_world() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn app(world_path: PathBuf) -> axum::Router {
-    editor_file_routes(world_path, None)
+    editor_file_routes(world_path, None, String::new())
 }
 
 fn json_body(content: &str) -> Body {

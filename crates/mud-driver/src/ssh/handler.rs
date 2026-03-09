@@ -71,8 +71,8 @@ impl SshHandler {
 impl russh::server::Handler for SshHandler {
     type Error = russh::Error;
 
-    /// Verify password against PlayerStore if available, otherwise accept
-    /// any non-empty password (dev fallback).
+    /// Verify password against PlayerStore if available, otherwise reject
+    /// all connections (database not configured).
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         if password.is_empty() {
             return Ok(Auth::reject());
@@ -86,9 +86,9 @@ impl russh::server::Handler for SshHandler {
                 _ => Ok(Auth::reject()),
             }
         } else {
-            // No player store — accept any non-empty password (dev fallback)
-            self.username = Some(user.to_string());
-            Ok(Auth::Accept)
+            // No player store — reject all connections (database not configured)
+            tracing::warn!(user = %user, "SSH auth rejected: no player store configured");
+            Ok(Auth::reject())
         }
     }
 

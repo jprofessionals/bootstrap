@@ -29,6 +29,7 @@ struct EditorState {
     /// `None` when no adapter is connected (e.g. in unit tests).
     #[allow(dead_code)]
     mop_rpc: Option<MopRpcClient>,
+    portal_socket: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,8 +69,8 @@ struct ErrorBody {
 /// Build the router for editor file CRUD endpoints.
 ///
 /// Intended to be nested at `/api/editor` in the main application.
-pub fn editor_file_routes(world_path: PathBuf, mop_rpc: Option<MopRpcClient>) -> Router {
-    let state = EditorState { world_path, mop_rpc };
+pub fn editor_file_routes(world_path: PathBuf, mop_rpc: Option<MopRpcClient>, portal_socket: String) -> Router {
+    let state = EditorState { world_path, mop_rpc, portal_socket };
 
     Router::new()
         .route("/files", get(list_files_handler))
@@ -191,26 +192,82 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
 }
 
 // ---------------------------------------------------------------------------
+// Session validation
+// ---------------------------------------------------------------------------
+
+/// Validate the session cookie by calling the Ruby portal's `/account/api/whoami`
+/// endpoint via the Unix domain socket. Returns `Ok(())` if the user has builder
+/// (or admin) access, or an error response otherwise.
+async fn validate_builder_session(portal_socket: &str, cookie_header: Option<&str>) -> Result<(), Response> {
+    // Skip auth when no portal socket is configured (e.g. in unit tests).
+    if portal_socket.is_empty() {
+        return Ok(());
+    }
+
+    let stream = match tokio::net::UnixStream::connect(portal_socket).await {
+        Ok(s) => s,
+        Err(_) => return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required")),
+    };
+    let io = hyper_util::rt::TokioIo::new(stream);
+
+    let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
+        Ok(parts) => parts,
+        Err(_) => return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required")),
+    };
+
+    tokio::spawn(async move { let _ = conn.await; });
+
+    let mut builder = hyper::Request::builder()
+        .method("GET")
+        .uri("/account/api/whoami")
+        .header("host", "localhost");
+
+    if let Some(cookies) = cookie_header {
+        builder = builder.header("cookie", cookies);
+    }
+
+    let req = builder.body(axum::body::Body::empty())
+        .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "request build failed"))?;
+
+    let resp = sender.send_request(req).await
+        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?;
+
+    if resp.status() != hyper::StatusCode::OK {
+        return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required"));
+    }
+
+    // Check if user has builder role
+    use http_body_util::BodyExt;
+    let body = resp.into_body().collect().await
+        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?
+        .to_bytes();
+
+    #[derive(serde::Deserialize)]
+    struct WhoamiResp { role: String }
+
+    let whoami: WhoamiResp = serde_json::from_slice(&body)
+        .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?;
+
+    if whoami.role == "player" {
+        return Err(error_response(StatusCode::FORBIDDEN, "builder access required"));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
 async fn list_files_handler(
     State(state): State<EditorState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<RepoQuery>,
 ) -> Response {
-    // TODO: Check read access via MOP when session validation is implemented.
-    // Extract user from session cookie, then:
-    //   let parts: Vec<&str> = query.repo.splitn(2, '/').collect();
-    //   let msg = DriverMessage::CheckBuilderAccess {
-    //       request_id: 0,
-    //       user: session_user,
-    //       namespace: parts[0].to_string(),
-    //       area: parts[1].to_string(),
-    //       action: "read".to_string(),
-    //   };
-    //   if let Some(ref rpc) = state.mop_rpc {
-    //       match rpc.call(msg).await { ... }
-    //   }
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok());
+    if let Err(e) = validate_builder_session(&state.portal_socket, cookie).await {
+        return e;
+    }
 
     let workspace = match resolve_workspace(&state.world_path, &query.repo) {
         Ok(ws) => ws,
@@ -258,9 +315,15 @@ fn collect_files(
 
 async fn read_file_handler(
     State(state): State<EditorState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<RepoQuery>,
     axum::extract::Path(rel_path): axum::extract::Path<String>,
 ) -> Response {
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok());
+    if let Err(e) = validate_builder_session(&state.portal_socket, cookie).await {
+        return e;
+    }
+
     let workspace = match resolve_workspace(&state.world_path, &query.repo) {
         Ok(ws) => ws,
         Err(e) => return e,
@@ -289,12 +352,15 @@ async fn read_file_handler(
 
 async fn write_file_handler(
     State(state): State<EditorState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<RepoQuery>,
     axum::extract::Path(rel_path): axum::extract::Path<String>,
     Json(body): Json<FileBody>,
 ) -> Response {
-    // TODO: Check write access via MOP when session validation is implemented.
-    // See list_files_handler for the pattern; use action: "write".
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok());
+    if let Err(e) = validate_builder_session(&state.portal_socket, cookie).await {
+        return e;
+    }
 
     if body.content.len() > MAX_FILE_SIZE {
         return error_response(
@@ -328,12 +394,15 @@ async fn write_file_handler(
 
 async fn create_file_handler(
     State(state): State<EditorState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<RepoQuery>,
     axum::extract::Path(rel_path): axum::extract::Path<String>,
     Json(body): Json<FileBody>,
 ) -> Response {
-    // TODO: Check write access via MOP when session validation is implemented.
-    // See list_files_handler for the pattern; use action: "write".
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok());
+    if let Err(e) = validate_builder_session(&state.portal_socket, cookie).await {
+        return e;
+    }
 
     if body.content.len() > MAX_FILE_SIZE {
         return error_response(
@@ -377,11 +446,14 @@ async fn create_file_handler(
 
 async fn delete_file_handler(
     State(state): State<EditorState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<RepoQuery>,
     axum::extract::Path(rel_path): axum::extract::Path<String>,
 ) -> Response {
-    // TODO: Check write access via MOP when session validation is implemented.
-    // See list_files_handler for the pattern; use action: "write".
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok());
+    if let Err(e) = validate_builder_session(&state.portal_socket, cookie).await {
+        return e;
+    }
 
     let workspace = match resolve_workspace(&state.world_path, &query.repo) {
         Ok(ws) => ws,

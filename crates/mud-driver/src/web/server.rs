@@ -77,7 +77,7 @@ impl WebServer {
 
         // Sub-routers that manage their own state (return Router<()>).
         // These must be added via nest_service since the main router uses AppState.
-        let editor = editor_file_routes(world_path.clone(), self.state.mop_rpc.clone());
+        let editor = editor_file_routes(world_path.clone(), self.state.mop_rpc.clone(), self.state.portal_socket.clone());
         let builder = build_log_routes(self.state.build_log.clone());
         let repos = repos_routes(
             self.state.repo_manager.clone(),
@@ -126,7 +126,10 @@ impl WebServer {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn area_status_handler(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
+async fn area_status_handler(
+    _user: crate::web::session::AuthUser,
+    State(state): State<AppState>,
+) -> axum::Json<serde_json::Value> {
     let loaded: Vec<String> = state.loaded_areas.read().await.iter().cloned().collect();
     let web_sockets: Vec<String> = state.area_web_sockets.read().await.keys().cloned().collect();
     axum::Json(serde_json::json!({
@@ -139,7 +142,14 @@ async fn welcome_handler(State(state): State<AppState>) -> Html<String> {
     let ctx = tera::Context::new();
     match state.templates.render("welcome.html", &ctx) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Template Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+            let escaped = format!("{}", e)
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;");
+            Html(format!("<h1>Template Error</h1><pre>{}</pre>", escaped))
+        }
     }
 }
 

@@ -81,6 +81,7 @@ module MudAdapter
             key: "mud.session",
             secret: secret,
             same_site: :lax,
+            httponly: true,
             path: "/"
 
         run portal_app

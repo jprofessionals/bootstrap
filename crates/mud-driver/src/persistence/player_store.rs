@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use sha2::{Sha256, Digest};
 use sqlx::{PgPool, Row};
 
 // ---------------------------------------------------------------------------
@@ -297,11 +298,17 @@ impl PlayerStore {
             None => return Ok(AuthResult::NotFound),
         };
 
-        // Fetch all tokens for this player.
+        // Extract the prefix from the token to narrow the search.
+        let prefix = token.strip_prefix("mud_")
+            .and_then(|hex_part| hex_part.get(..8))
+            .unwrap_or("");
+
         let rows = sqlx::query(
-            "SELECT id, token_hash FROM access_tokens WHERE player_id = $1",
+            "SELECT id, token_hash FROM access_tokens \
+             WHERE player_id = $1 AND token_prefix = $2",
         )
         .bind(player_id)
+        .bind(prefix)
         .fetch_all(&self.pool)
         .await
         .context("fetching access tokens for authentication")?;
@@ -381,10 +388,11 @@ impl PlayerStore {
         let mut token_bytes = [0u8; 32];
         rand::fill(&mut token_bytes);
         let token = hex::encode(token_bytes);
+        let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
         sqlx::query("INSERT INTO sessions (player_id, token) VALUES ($1, $2)")
             .bind(player_id)
-            .bind(&token)
+            .bind(&token_hash)
             .execute(&self.pool)
             .await
             .context("creating session")?;
@@ -394,11 +402,13 @@ impl PlayerStore {
 
     /// Check whether a session token is valid for the given player.
     pub async fn valid_session(&self, player_id: &str, token: &str) -> Result<bool> {
+        let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sessions WHERE player_id = $1 AND token = $2",
+            "SELECT COUNT(*) FROM sessions WHERE player_id = $1 AND token = $2 \
+             AND created_at > NOW() - INTERVAL '30 days'",
         )
         .bind(player_id)
-        .bind(token)
+        .bind(&token_hash)
         .fetch_one(&self.pool)
         .await
         .context("validating session")?;
@@ -408,8 +418,9 @@ impl PlayerStore {
 
     /// Destroy a session by token.
     pub async fn destroy_session(&self, token: &str) -> Result<()> {
+        let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
         sqlx::query("DELETE FROM sessions WHERE token = $1")
-            .bind(token)
+            .bind(&token_hash)
             .execute(&self.pool)
             .await
             .context("destroying session")?;

@@ -93,6 +93,8 @@ pub struct Server {
     /// Database manager, initialized when `database.admin_password` is configured.
     #[allow(dead_code)]
     db_manager: Option<DatabaseManager>,
+    /// Credential encryptor for AES-256-GCM encryption of stored secrets.
+    encryptor: Option<Arc<CredentialEncryptor>>,
     /// Player store for account/character/session operations.
     player_store: Option<Arc<PlayerStore>>,
     /// Git repository manager for bare repo + ACL management.
@@ -162,6 +164,7 @@ impl Server {
             adapter_languages: Vec::new(),
             adapter_primary_languages: Vec::new(),
             db_manager: None,
+            encryptor: None,
             player_store: None,
             repo_manager: None,
             workspace: None,
@@ -251,23 +254,15 @@ impl Server {
                     init_templates().context("initializing web templates")?,
                 );
 
-                // Build AiKeyStore — auto-generate encryption key if not configured.
-                let ai_key_store = if let Some(db_mgr) = &self.db_manager {
-                    let key_hex = match &self.config.database.encryption_key {
-                        Some(k) => k.clone(),
-                        None => load_or_generate_encryption_key(&self.config.world.data_path)?,
-                    };
-                    let key_bytes = hex::decode(&key_hex)
-                        .context("decoding encryption_key as hex")?;
-                    let encryptor = Arc::new(CredentialEncryptor::new(&key_bytes)
-                        .context("creating credential encryptor")?);
+                // Build AiKeyStore — reuse encryptor from database setup.
+                let ai_key_store = if let (Some(db_mgr), Some(encryptor)) = (&self.db_manager, &self.encryptor) {
                     info!("AI key store initialized");
                     Some(Arc::new(AiKeyStore::new(
                         db_mgr.driver_pool().clone(),
-                        encryptor,
+                        Arc::clone(encryptor),
                     )))
                 } else {
-                    info!("AI key store not configured (no database manager)");
+                    info!("AI key store not configured (no database manager or encryptor)");
                     None
                 };
 
@@ -631,7 +626,18 @@ impl Server {
 
         info!("Initializing database...");
 
-        let db_manager = DatabaseManager::new(&self.config.database)
+        let encryptor = {
+            let key_hex = match &self.config.database.encryption_key {
+                Some(k) => k.clone(),
+                None => load_or_generate_encryption_key(&self.config.world.data_path)?,
+            };
+            let key_bytes = hex::decode(&key_hex)
+                .context("decoding encryption_key as hex")?;
+            Some(Arc::new(CredentialEncryptor::new(&key_bytes)
+                .context("creating credential encryptor")?))
+        };
+
+        let db_manager = DatabaseManager::new(&self.config.database, encryptor.clone())
             .await
             .context("initializing database manager")?;
 
@@ -687,6 +693,7 @@ impl Server {
         self.repo_manager = Some(Arc::clone(&rm));
         self.workspace = Some(Arc::clone(&ws));
         self.merge_request_manager = Some(mrm);
+        self.encryptor = encryptor;
         self.db_manager = Some(db_manager);
 
         info!("PlayerStore, RepoManager, Workspace, and MergeRequestManager initialized");

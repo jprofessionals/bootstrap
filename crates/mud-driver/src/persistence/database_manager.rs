@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use rand::Rng;
@@ -5,6 +7,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
 use crate::config::DatabaseConfig;
+use super::credential_encryptor::CredentialEncryptor;
 
 // ---------------------------------------------------------------------------
 // AreaMeta — metadata for a registered area
@@ -37,12 +40,13 @@ pub struct DatabaseManager {
     stdlib_db: String,
     db_host: String,
     db_port: u16,
+    encryptor: Option<Arc<CredentialEncryptor>>,
 }
 
 impl DatabaseManager {
     /// Connect to admin (`postgres`), create both driver and stdlib databases
     /// if they don't exist, then connect to each.
-    pub async fn new(config: &DatabaseConfig) -> Result<Self> {
+    pub async fn new(config: &DatabaseConfig, encryptor: Option<Arc<CredentialEncryptor>>) -> Result<Self> {
         let admin_password = config
             .admin_password
             .as_deref()
@@ -94,6 +98,7 @@ impl DatabaseManager {
             stdlib_db: config.stdlib_db.clone(),
             db_host: config.host.clone(),
             db_port: config.port,
+            encryptor,
         })
     }
 
@@ -176,10 +181,16 @@ impl DatabaseManager {
 
         match row {
             Some((db_name, db_user, db_password)) => {
+                let password = if let Some(enc) = &self.encryptor {
+                    enc.decrypt(&db_password)
+                        .context("decrypting area database password")?
+                } else {
+                    db_password
+                };
                 let url = format!(
                     "postgres://{}:{}@{}:{}/{}",
                     urlencoding::encode(&db_user),
-                    urlencoding::encode(&db_password),
+                    urlencoding::encode(&password),
                     self.db_host,
                     self.db_port,
                     db_name,
@@ -279,10 +290,8 @@ impl DatabaseManager {
     ///
     /// The database and role names are derived from the namespace and area
     /// name (`mud_area_<ns>_<area>`). A random password is generated and
-    /// stored in the `area_databases` table.
-    ///
-    /// NOTE: Passwords are stored as plaintext for now. Task 2 will add
-    /// `CredentialEncryptor` for AES-256-GCM encryption.
+    /// stored in the `area_databases` table. If a `CredentialEncryptor` is
+    /// configured, the password is encrypted with AES-256-GCM before storage.
     pub async fn provision_area_db(&self, ns: &str, area: &str) -> Result<()> {
         Self::validate_name(ns)?;
         Self::validate_name(area)?;
@@ -343,6 +352,13 @@ impl DatabaseManager {
         }
 
         // Store credentials in the driver database.
+        let stored_password = if let Some(enc) = &self.encryptor {
+            enc.encrypt(&db_password)
+                .context("encrypting area database password")?
+        } else {
+            db_password.clone()
+        };
+
         sqlx::query(
             "INSERT INTO area_databases (namespace, area_name, db_name, db_user, db_password) \
              VALUES ($1, $2, $3, $4, $5) \
@@ -352,7 +368,7 @@ impl DatabaseManager {
         .bind(area)
         .bind(&db_name)
         .bind(&db_user)
-        .bind(&db_password) // plaintext for now; Task 2 adds encryption
+        .bind(&stored_password)
         .execute(&self.driver_pool)
         .await
         .context("storing area database credentials")?;
