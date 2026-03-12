@@ -52,28 +52,91 @@ struct KfunEntry {
 
 /// List of recognised kernel functions (efuns).
 const KFUN_TABLE: &[KfunEntry] = &[
-    KfunEntry { name: "write", id: 0 },
+    KfunEntry {
+        name: "write",
+        id: 0,
+    },
     KfunEntry { name: "say", id: 1 },
-    KfunEntry { name: "tell_object", id: 2 },
-    KfunEntry { name: "this_player", id: 3 },
-    KfunEntry { name: "environment", id: 4 },
-    KfunEntry { name: "move_object", id: 5 },
-    KfunEntry { name: "find_object", id: 6 },
-    KfunEntry { name: "clone_object", id: 7 },
-    KfunEntry { name: "destruct_object", id: 8 },
-    KfunEntry { name: "implode", id: 9 },
-    KfunEntry { name: "explode", id: 10 },
-    KfunEntry { name: "strlen", id: 11 },
-    KfunEntry { name: "member_array", id: 12 },
-    KfunEntry { name: "allocate", id: 13 },
-    KfunEntry { name: "call_other", id: 14 },
-    KfunEntry { name: "random", id: 15 },
-    KfunEntry { name: "time", id: 16 },
-    KfunEntry { name: "ctime", id: 17 },
-    KfunEntry { name: "lower_case", id: 18 },
-    KfunEntry { name: "upper_case", id: 19 },
-    KfunEntry { name: "sscanf", id: 20 },
-    KfunEntry { name: "sprintf", id: 21 },
+    KfunEntry {
+        name: "tell_object",
+        id: 2,
+    },
+    KfunEntry {
+        name: "this_player",
+        id: 3,
+    },
+    KfunEntry {
+        name: "environment",
+        id: 4,
+    },
+    KfunEntry {
+        name: "move_object",
+        id: 5,
+    },
+    KfunEntry {
+        name: "find_object",
+        id: 6,
+    },
+    KfunEntry {
+        name: "clone_object",
+        id: 7,
+    },
+    KfunEntry {
+        name: "destruct_object",
+        id: 8,
+    },
+    KfunEntry {
+        name: "implode",
+        id: 9,
+    },
+    KfunEntry {
+        name: "explode",
+        id: 10,
+    },
+    KfunEntry {
+        name: "strlen",
+        id: 11,
+    },
+    KfunEntry {
+        name: "member_array",
+        id: 12,
+    },
+    KfunEntry {
+        name: "allocate",
+        id: 13,
+    },
+    KfunEntry {
+        name: "call_other",
+        id: 14,
+    },
+    KfunEntry {
+        name: "random",
+        id: 15,
+    },
+    KfunEntry {
+        name: "time",
+        id: 16,
+    },
+    KfunEntry {
+        name: "ctime",
+        id: 17,
+    },
+    KfunEntry {
+        name: "lower_case",
+        id: 18,
+    },
+    KfunEntry {
+        name: "upper_case",
+        id: 19,
+    },
+    KfunEntry {
+        name: "sscanf",
+        id: 20,
+    },
+    KfunEntry {
+        name: "sprintf",
+        id: 21,
+    },
 ];
 
 fn lookup_kfun(name: &str) -> Option<u16> {
@@ -206,7 +269,10 @@ impl Compiler {
     }
 
     fn resolve_global(&self, name: &str) -> Option<u16> {
-        self.globals.iter().position(|n| n == name).map(|i| i as u16)
+        self.globals
+            .iter()
+            .position(|n| n == name)
+            .map(|i| i as u16)
     }
 
     fn resolve_function(&self, name: &str) -> Option<u16> {
@@ -280,8 +346,8 @@ impl Compiler {
         self.current_code.clear();
         self.loop_stack.clear();
 
-        let varargs = decl.modifiers.contains(&Modifier::Varargs)
-            || decl.params.iter().any(|p| p.varargs);
+        let varargs =
+            decl.modifiers.contains(&Modifier::Varargs) || decl.params.iter().any(|p| p.varargs);
 
         // Declare parameters as the first locals.
         for param in &decl.params {
@@ -304,7 +370,11 @@ impl Compiler {
             self.emit(OpCode::ReturnNil);
         }
 
-        let modifiers: Vec<u8> = decl.modifiers.iter().map(|m| modifier_to_flag(*m)).collect();
+        let modifiers: Vec<u8> = decl
+            .modifiers
+            .iter()
+            .map(|m| modifier_to_flag(*m))
+            .collect();
 
         Ok(CompiledFunction {
             name: decl.name.clone(),
@@ -462,7 +532,11 @@ impl Compiler {
                     return Err(CompileError::BreakOutsideLoop { line: span.line });
                 }
                 let patch = self.emit_jump(OpCode::Jump(0));
-                self.loop_stack.last_mut().unwrap().break_patches.push(patch);
+                self.loop_stack
+                    .last_mut()
+                    .unwrap()
+                    .break_patches
+                    .push(patch);
             }
 
             Stmt::Continue(span) => {
@@ -554,10 +628,7 @@ impl Compiler {
                     self.compile_expr(expr)?;
                     self.emit(OpCode::Eq);
                     let j = self.emit_jump(OpCode::JumpIfTrue(0));
-                    case_jumps.push(CaseJump {
-                        body_jump: j,
-
-                    });
+                    case_jumps.push(CaseJump { body_jump: j });
                 }
                 CaseLabel::Range(lo, hi) => {
                     // value >= lo && value <= hi
@@ -585,7 +656,6 @@ impl Compiler {
                     // position after the hi_check success.
                     case_jumps.push(CaseJump {
                         body_jump: hi_check,
-
                     });
 
                     // Patch the skips to the next case's comparison.
@@ -606,9 +676,7 @@ impl Compiler {
                     // Default: unconditional jump emitted after all cases.
                     let j = self.emit_jump(OpCode::Jump(0));
                     default_jump = Some(j);
-                    case_jumps.push(CaseJump {
-                        body_jump: j,
-                    });
+                    case_jumps.push(CaseJump { body_jump: j });
                 }
             }
         }
@@ -742,26 +810,24 @@ impl Compiler {
                 self.emit(op);
             }
 
-            Expr::Unary(unary) => {
-                match unary.op {
-                    UnaryOp::PreIncrement => {
-                        self.compile_pre_inc_dec(&unary.expr, true, unary.span.line)?;
-                    }
-                    UnaryOp::PreDecrement => {
-                        self.compile_pre_inc_dec(&unary.expr, false, unary.span.line)?;
-                    }
-                    _ => {
-                        self.compile_expr(&unary.expr)?;
-                        let op = match unary.op {
-                            UnaryOp::Neg => OpCode::Neg,
-                            UnaryOp::Not => OpCode::Not,
-                            UnaryOp::BitNot => OpCode::BitNot,
-                            UnaryOp::PreIncrement | UnaryOp::PreDecrement => unreachable!(),
-                        };
-                        self.emit(op);
-                    }
+            Expr::Unary(unary) => match unary.op {
+                UnaryOp::PreIncrement => {
+                    self.compile_pre_inc_dec(&unary.expr, true, unary.span.line)?;
                 }
-            }
+                UnaryOp::PreDecrement => {
+                    self.compile_pre_inc_dec(&unary.expr, false, unary.span.line)?;
+                }
+                _ => {
+                    self.compile_expr(&unary.expr)?;
+                    let op = match unary.op {
+                        UnaryOp::Neg => OpCode::Neg,
+                        UnaryOp::Not => OpCode::Not,
+                        UnaryOp::BitNot => OpCode::BitNot,
+                        UnaryOp::PreIncrement | UnaryOp::PreDecrement => unreachable!(),
+                    };
+                    self.emit(op);
+                }
+            },
 
             Expr::PostIncrement(inner, span) => {
                 self.compile_post_inc_dec(inner, true, span.line)?;

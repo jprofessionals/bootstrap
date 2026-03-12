@@ -10,6 +10,7 @@ use axum::routing::{any, get};
 use axum::{Json, Router};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
+use mud_mop::message::{DriverMessage, Value};
 use serde::Deserialize;
 use tokio::net::UnixStream;
 use tokio::sync::RwLock;
@@ -59,7 +60,7 @@ struct ProjectState {
 /// 1. SPA mode: `build_cache_path/<ns>-<name>/dist/` — if dist/ exists,
 ///    serve matching files or fall back to `dist/index.html`.
 /// 2. Template mode: `world_path/<ns>/<name>/web/templates/` — if templates/
-///    exists, render `.html` files with Tera (context: `area_name`, `namespace`).
+///    exists, render `.html` files with Tera and adapter-provided `GetWebData`.
 /// 3. Static mode: `world_path/<ns>/<name>/web/` — serve static files.
 /// 4. 404 if nothing matches.
 pub fn project_routes(
@@ -181,13 +182,8 @@ async fn serve_area_file(
             let method = req.method().clone();
             let headers = req.headers().clone();
             let body = req.into_body();
-            return proxy_to_portal(
-                &socket_path,
-                method,
-                &format!("/{path}"),
-                &headers,
-                body,
-            ).await;
+            return proxy_to_portal(&socket_path, method, &format!("/{path}"), &headers, body)
+                .await;
         }
     }
 
@@ -257,27 +253,16 @@ async fn serve_area_path(
     let templates_dir = state.world_path.join(ns).join(name).join("web/templates");
     if templates_dir.is_dir() {
         // Only render index.html for the root request
-        let template_file = if path.is_empty() {
-            "index.html"
-        } else {
-            path
-        };
+        let template_file = if path.is_empty() { "index.html" } else { path };
 
         let template_path = templates_dir.join(template_file);
         if template_path.is_file() && template_file.ends_with(".html") {
             match tera::Tera::new(&format!("{}/**/*.html", templates_dir.display())) {
                 Ok(tera) => {
-                    let mut ctx = tera::Context::new();
-                    ctx.insert("area_name", name);
-                    ctx.insert("namespace", ns);
-                    // Provide defaults for template variables that the
-                    // adapter would normally supply via GetWebData MOP RPC
-                    // (not yet wired up — TODO).
-                    ctx.insert("room_count", &0);
-                    ctx.insert("item_count", &0);
-                    ctx.insert("npc_count", &0);
-                    ctx.insert("server_name", "MUD Driver");
-                    ctx.insert("players_online", &0);
+                    let ctx = match build_template_context(state, ns, name).await {
+                        Ok(ctx) => ctx,
+                        Err(resp) => return resp,
+                    };
                     match tera.render(template_file, &ctx) {
                         Ok(html) => {
                             return (
@@ -333,6 +318,118 @@ async fn serve_area_path(
 
     // 4. Nothing matched
     StatusCode::NOT_FOUND.into_response()
+}
+
+async fn build_template_context(
+    state: &ProjectState,
+    ns: &str,
+    name: &str,
+) -> Result<tera::Context, Response> {
+    let mut ctx = tera::Context::new();
+    ctx.insert("area_name", name);
+    ctx.insert("namespace", ns);
+    insert_default_web_data(&mut ctx);
+
+    let Some(mop_rpc) = &state.mop_rpc else {
+        return Ok(ctx);
+    };
+
+    let area_path = state.world_path.join(ns).join(name);
+    let language = language_for_area_path(&area_path);
+    let area_key = format!("{ns}/{name}");
+    let result = mop_rpc
+        .call_for_language(
+            DriverMessage::GetWebData {
+                request_id: 0,
+                area_key,
+            },
+            Some(language),
+        )
+        .await;
+
+    match result {
+        Ok(value) => {
+            insert_web_data(&mut ctx, value)?;
+            Ok(ctx)
+        }
+        Err(error) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Template data unavailable: {error}"),
+        )
+            .into_response()),
+    }
+}
+
+fn insert_default_web_data(ctx: &mut tera::Context) {
+    ctx.insert("room_count", &0);
+    ctx.insert("item_count", &0);
+    ctx.insert("npc_count", &0);
+    ctx.insert("server_name", "");
+    ctx.insert("players_online", &0);
+}
+
+fn insert_web_data(ctx: &mut tera::Context, value: Value) -> Result<(), Response> {
+    let map = match value {
+        Value::Map(mut root) => match root.remove("data") {
+            Some(Value::Map(data)) => data,
+            Some(other) => {
+                return Err((
+                    StatusCode::BAD_GATEWAY,
+                    format!("Template data must be an object, got {other:?}"),
+                )
+                    .into_response());
+            }
+            None => root,
+        },
+        other => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                format!("Template data response must be a map, got {other:?}"),
+            )
+                .into_response());
+        }
+    };
+
+    for (key, value) in map {
+        let json = serde_json::to_value(value).map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Template data serialization failed: {e}"),
+            )
+                .into_response()
+        })?;
+        ctx.insert(&key, &json);
+    }
+
+    Ok(())
+}
+
+fn language_for_area_path(area_path: &std::path::Path) -> String {
+    let yaml_path = area_path.join("mud.yaml");
+    let Ok(contents) = std::fs::read_to_string(yaml_path) else {
+        return "ruby".to_string();
+    };
+
+    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&contents) else {
+        return "ruby".to_string();
+    };
+
+    if let Some(language) = yaml.get("language").and_then(|v| v.as_str()) {
+        match language {
+            "lpc" => return "lpc".to_string(),
+            "rust" => return "rust".to_string(),
+            "ruby" => return "ruby".to_string(),
+            _ => {}
+        }
+    }
+
+    if let Some(framework) = yaml.get("framework").and_then(|v| v.as_str()) {
+        if framework != "none" {
+            return "kotlin".to_string();
+        }
+    }
+
+    "ruby".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -445,9 +542,7 @@ where
         }
     });
 
-    let mut builder = hyper::Request::builder()
-        .method(method)
-        .uri(path_and_query);
+    let mut builder = hyper::Request::builder().method(method).uri(path_and_query);
 
     for (name, value) in headers.iter() {
         if name == axum::http::header::HOST {
@@ -495,8 +590,18 @@ mod tests {
     #[tokio::test]
     async fn test_build_logs_api() {
         let build_log = Arc::new(BuildLog::new(100));
-        build_log.append("ns/myarea", LogLevel::Info, "spa_build", "npm install succeeded");
-        build_log.append("ns/myarea", LogLevel::Error, "spa_build", "vite build failed");
+        build_log.append(
+            "ns/myarea",
+            LogLevel::Info,
+            "spa_build",
+            "npm install succeeded",
+        );
+        build_log.append(
+            "ns/myarea",
+            LogLevel::Error,
+            "spa_build",
+            "vite build failed",
+        );
 
         let app = build_log_routes(build_log);
 

@@ -4,8 +4,8 @@
 //! These kfuns route through driver services via MOP. All are stubs until
 //! MOP integration is complete.
 
-use crate::bytecode::LpcValue;
 use super::{KfunContext, LpcError};
+use crate::bytecode::LpcValue;
 
 /// read_file(string path, varargs int start, int lines) -> string
 ///

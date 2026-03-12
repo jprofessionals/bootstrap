@@ -71,10 +71,7 @@ adapters:
     assert_eq!(cfg.database.host, "db.example.com");
     assert_eq!(cfg.database.port, 5433);
     assert_eq!(cfg.database.admin_user, "mud_root");
-    assert_eq!(
-        cfg.database.admin_password.as_deref(),
-        Some("secret123")
-    );
+    assert_eq!(cfg.database.admin_password.as_deref(), Some("secret123"));
     assert_eq!(cfg.database.driver_db, "mud_prod");
 
     // Adapters

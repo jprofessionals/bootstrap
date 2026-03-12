@@ -180,9 +180,7 @@ async fn lpc_template_area_creation() {
     // Verify template placeholder substitution in an LPC source file
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/rooms/entrance.c?repo=alice/lpcworld",
-        ))
+        .get(server.url("/api/editor/files/rooms/entrance.c?repo=alice/lpcworld"))
         .send()
         .await
         .unwrap();

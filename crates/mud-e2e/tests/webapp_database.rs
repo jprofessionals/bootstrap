@@ -66,9 +66,7 @@ end
 
     server
         .client
-        .post(server.url(
-            "/api/editor/files/db/migrations/001_create_notes.rb?repo=bob/bob",
-        ))
+        .post(server.url("/api/editor/files/db/migrations/001_create_notes.rb?repo=bob/bob"))
         .json(&json!({"content": migration}))
         .send()
         .await

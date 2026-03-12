@@ -1,6 +1,6 @@
-use sqlx::PgPool;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use sqlx::PgPool;
 use sqlx::Row;
 
 #[derive(Debug, Clone)]

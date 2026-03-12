@@ -6,8 +6,8 @@ use rand::Rng;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
-use crate::config::DatabaseConfig;
 use super::credential_encryptor::CredentialEncryptor;
+use crate::config::DatabaseConfig;
 
 // ---------------------------------------------------------------------------
 // AreaMeta — metadata for a registered area
@@ -46,11 +46,11 @@ pub struct DatabaseManager {
 impl DatabaseManager {
     /// Connect to admin (`postgres`), create both driver and stdlib databases
     /// if they don't exist, then connect to each.
-    pub async fn new(config: &DatabaseConfig, encryptor: Option<Arc<CredentialEncryptor>>) -> Result<Self> {
-        let admin_password = config
-            .admin_password
-            .as_deref()
-            .unwrap_or("");
+    pub async fn new(
+        config: &DatabaseConfig,
+        encryptor: Option<Arc<CredentialEncryptor>>,
+    ) -> Result<Self> {
+        let admin_password = config.admin_password.as_deref().unwrap_or("");
 
         // 1. Connect to the default `postgres` database for admin operations.
         let admin_url = format!(
@@ -105,12 +105,11 @@ impl DatabaseManager {
     /// Create a database if it does not already exist.
     async fn ensure_database(admin_pool: &PgPool, db_name: &str) -> Result<()> {
         Self::validate_name(db_name)?;
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
-        )
-        .bind(db_name)
-        .fetch_one(admin_pool)
-        .await?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(db_name)
+                .fetch_one(admin_pool)
+                .await?;
 
         if !exists {
             sqlx::query(&format!("CREATE DATABASE \"{}\"", db_name))
@@ -314,12 +313,11 @@ impl DatabaseManager {
         let db_password = generate_password(32);
 
         // Create the role if it does not exist.
-        let role_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)",
-        )
-        .bind(&db_user)
-        .fetch_one(&self.admin_pool)
-        .await?;
+        let role_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)")
+                .bind(&db_user)
+                .fetch_one(&self.admin_pool)
+                .await?;
 
         if !role_exists {
             // Role names are validated above, safe for interpolation.
@@ -334,12 +332,11 @@ impl DatabaseManager {
         }
 
         // Create the database if it does not exist.
-        let db_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
-        )
-        .bind(&db_name)
-        .fetch_one(&self.admin_pool)
-        .await?;
+        let db_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(&db_name)
+                .fetch_one(&self.admin_pool)
+                .await?;
 
         if !db_exists {
             sqlx::query(&format!(
@@ -386,12 +383,11 @@ impl DatabaseManager {
         let db_user = format!("mud_area_{}_{}", ns, area);
 
         // Drop the database if it exists.
-        let db_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
-        )
-        .bind(&db_name)
-        .fetch_one(&self.admin_pool)
-        .await?;
+        let db_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(&db_name)
+                .fetch_one(&self.admin_pool)
+                .await?;
 
         if db_exists {
             sqlx::query(&format!("DROP DATABASE \"{}\"", db_name))
@@ -401,12 +397,11 @@ impl DatabaseManager {
         }
 
         // Drop the role if it exists.
-        let role_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)",
-        )
-        .bind(&db_user)
-        .fetch_one(&self.admin_pool)
-        .await?;
+        let role_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)")
+                .bind(&db_user)
+                .fetch_one(&self.admin_pool)
+                .await?;
 
         if role_exists {
             sqlx::query(&format!("DROP ROLE \"{}\"", db_user))

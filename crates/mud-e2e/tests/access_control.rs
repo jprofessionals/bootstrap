@@ -56,11 +56,7 @@ async fn access_control() {
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        403,
-        "bob should not access alice's branches"
-    );
+    assert_eq!(resp.status(), 403, "bob should not access alice's branches");
 
     // Bob cannot access alice's git log
     let resp = bob
@@ -92,9 +88,7 @@ async fn access_control() {
 
     // Alice creates content for builder
     alice
-        .put(server.url(
-            "/api/editor/files/rooms/entrance.rb?repo=alice/alice",
-        ))
+        .put(server.url("/api/editor/files/rooms/entrance.rb?repo=alice/alice"))
         .json(&json!({"content": "class Entrance < Room\n  title \"Hall\"\nend\n"}))
         .send()
         .await

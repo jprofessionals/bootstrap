@@ -72,12 +72,7 @@ fn cancel_nonexistent_returns_none() {
 fn cancel_prevents_polling() {
     let mut sched = Scheduler::new();
     let obj = make_obj(1);
-    let handle = sched.schedule(
-        obj,
-        "tick".to_string(),
-        vec![],
-        Duration::ZERO,
-    );
+    let handle = sched.schedule(obj, "tick".to_string(), vec![], Duration::ZERO);
     sched.cancel(handle);
     let due = sched.poll_due();
     assert!(due.is_empty());
@@ -93,18 +88,8 @@ fn calls_ordered_by_deadline() {
     let obj = make_obj(1);
 
     // Schedule in reverse order: later first, earlier second
-    sched.schedule(
-        obj.clone(),
-        "second".to_string(),
-        vec![],
-        Duration::ZERO,
-    );
-    sched.schedule(
-        obj.clone(),
-        "first".to_string(),
-        vec![],
-        Duration::ZERO,
-    );
+    sched.schedule(obj.clone(), "second".to_string(), vec![], Duration::ZERO);
+    sched.schedule(obj.clone(), "first".to_string(), vec![], Duration::ZERO);
 
     // Both should fire since delay is ZERO
     let due = sched.poll_due();
@@ -148,8 +133,18 @@ fn pending_count() {
     assert_eq!(sched.pending_count(), 0);
 
     let obj = make_obj(1);
-    sched.schedule(obj.clone(), "a".to_string(), vec![], Duration::from_secs(3600));
-    sched.schedule(obj.clone(), "b".to_string(), vec![], Duration::from_secs(3600));
+    sched.schedule(
+        obj.clone(),
+        "a".to_string(),
+        vec![],
+        Duration::from_secs(3600),
+    );
+    sched.schedule(
+        obj.clone(),
+        "b".to_string(),
+        vec![],
+        Duration::from_secs(3600),
+    );
     assert_eq!(sched.pending_count(), 2);
 
     // Cancel one

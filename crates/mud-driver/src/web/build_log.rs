@@ -42,7 +42,9 @@ impl BuildLog {
         };
 
         let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let deque = map.entry(area_key.to_string()).or_insert_with(VecDeque::new);
+        let deque = map
+            .entry(area_key.to_string())
+            .or_insert_with(VecDeque::new);
 
         if deque.len() >= self.capacity {
             deque.pop_front();
@@ -50,7 +52,12 @@ impl BuildLog {
         deque.push_back(entry);
     }
 
-    pub fn recent(&self, area_key: &str, limit: usize, level: Option<LogLevel>) -> Vec<BuildLogEntry> {
+    pub fn recent(
+        &self,
+        area_key: &str,
+        limit: usize,
+        level: Option<LogLevel>,
+    ) -> Vec<BuildLogEntry> {
         let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let Some(deque) = map.get(area_key) else {
             return Vec::new();

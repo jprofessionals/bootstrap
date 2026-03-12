@@ -31,9 +31,7 @@ async fn unix_socket_driver_message_round_trip() {
         write_driver_message(&mut left, &sent).await.unwrap();
     });
 
-    let read_handle = tokio::spawn(async move {
-        read_driver_message(&mut right).await.unwrap()
-    });
+    let read_handle = tokio::spawn(async move { read_driver_message(&mut right).await.unwrap() });
 
     let received = timeout(TEST_TIMEOUT, async {
         write_handle.await.unwrap();
@@ -61,9 +59,7 @@ async fn unix_socket_adapter_message_round_trip() {
         write_adapter_message(&mut left, &sent).await.unwrap();
     });
 
-    let read_handle = tokio::spawn(async move {
-        read_adapter_message(&mut right).await.unwrap()
-    });
+    let read_handle = tokio::spawn(async move { read_adapter_message(&mut right).await.unwrap() });
 
     let received = timeout(TEST_TIMEOUT, async {
         write_handle.await.unwrap();
@@ -162,14 +158,18 @@ async fn bidirectional_driver_and_adapter_messages() {
 
     let result = timeout(TEST_TIMEOUT, async {
         // Driver writes a DriverMessage
-        write_driver_message(&mut left_write, &driver_send).await.unwrap();
+        write_driver_message(&mut left_write, &driver_send)
+            .await
+            .unwrap();
 
         // Adapter reads the DriverMessage
         let received_driver = read_driver_message(&mut right_read).await.unwrap();
         assert_eq!(driver_msg, received_driver);
 
         // Adapter writes an AdapterMessage back
-        write_adapter_message(&mut right_write, &adapter_send).await.unwrap();
+        write_adapter_message(&mut right_write, &adapter_send)
+            .await
+            .unwrap();
 
         // Driver reads the AdapterMessage
         let received_adapter = read_adapter_message(&mut left_read).await.unwrap();
@@ -192,7 +192,9 @@ async fn bidirectional_interleaved_messages() {
             session_id: 1,
             username: "bob".into(),
         };
-        write_driver_message(&mut left_write, &start_msg).await.unwrap();
+        write_driver_message(&mut left_write, &start_msg)
+            .await
+            .unwrap();
 
         // Adapter reads it
         let received = read_driver_message(&mut right_read).await.unwrap();
@@ -203,7 +205,9 @@ async fn bidirectional_interleaved_messages() {
             session_id: 1,
             text: "Welcome, bob!\r\n".into(),
         };
-        write_adapter_message(&mut right_write, &output_msg).await.unwrap();
+        write_adapter_message(&mut right_write, &output_msg)
+            .await
+            .unwrap();
 
         // Driver reads it
         let received = read_adapter_message(&mut left_read).await.unwrap();
@@ -214,7 +218,9 @@ async fn bidirectional_interleaved_messages() {
             session_id: 1,
             line: "look".into(),
         };
-        write_driver_message(&mut left_write, &input_msg).await.unwrap();
+        write_driver_message(&mut left_write, &input_msg)
+            .await
+            .unwrap();
 
         // Adapter reads it
         let received = read_driver_message(&mut right_read).await.unwrap();
@@ -225,7 +231,9 @@ async fn bidirectional_interleaved_messages() {
             session_id: 1,
             text: "You are in a dark room.\r\n".into(),
         };
-        write_adapter_message(&mut right_write, &output_msg2).await.unwrap();
+        write_adapter_message(&mut right_write, &output_msg2)
+            .await
+            .unwrap();
 
         // Driver reads it
         let received = read_adapter_message(&mut left_read).await.unwrap();
@@ -258,9 +266,8 @@ async fn large_payload_transfers_correctly() {
         write_adapter_message(&mut writer_end, &sent).await.unwrap();
     });
 
-    let read_handle = tokio::spawn(async move {
-        read_adapter_message(&mut reader_end).await.unwrap()
-    });
+    let read_handle =
+        tokio::spawn(async move { read_adapter_message(&mut reader_end).await.unwrap() });
 
     let received = timeout(Duration::from_secs(10), async {
         write_handle.await.unwrap();
@@ -272,7 +279,11 @@ async fn large_payload_transfers_correctly() {
     assert_eq!(msg, received);
 
     // Verify the actual string content
-    if let AdapterMessage::CallResult { result: Value::String(s), .. } = &received {
+    if let AdapterMessage::CallResult {
+        result: Value::String(s),
+        ..
+    } = &received
+    {
         assert_eq!(s.len(), 1_000_000);
         assert!(s.chars().all(|c| c == 'A'));
     } else {
@@ -286,11 +297,13 @@ async fn large_call_with_complex_args() {
 
     // Build a message with a large array of values
     let large_args: Vec<Value> = (0..10_000)
-        .map(|i| Value::Map(std::collections::HashMap::from([
-            ("index".into(), Value::Int(i)),
-            ("name".into(), Value::String(format!("item_{i}"))),
-            ("active".into(), Value::Bool(i % 2 == 0)),
-        ])))
+        .map(|i| {
+            Value::Map(std::collections::HashMap::from([
+                ("index".into(), Value::Int(i)),
+                ("name".into(), Value::String(format!("item_{i}"))),
+                ("active".into(), Value::Bool(i % 2 == 0)),
+            ]))
+        })
         .collect();
 
     let msg = DriverMessage::Call {
@@ -305,9 +318,8 @@ async fn large_call_with_complex_args() {
         write_driver_message(&mut writer_end, &sent).await.unwrap();
     });
 
-    let read_handle = tokio::spawn(async move {
-        read_driver_message(&mut reader_end).await.unwrap()
-    });
+    let read_handle =
+        tokio::spawn(async move { read_driver_message(&mut reader_end).await.unwrap() });
 
     let received = timeout(Duration::from_secs(10), async {
         write_handle.await.unwrap();
@@ -392,7 +404,9 @@ async fn close_after_partial_communication() {
 
         // Send a response
         let resp = AdapterMessage::Pong { seq: 1 };
-        write_adapter_message(&mut right_write, &resp).await.unwrap();
+        write_adapter_message(&mut right_write, &resp)
+            .await
+            .unwrap();
 
         let received = read_adapter_message(&mut left_read).await.unwrap();
         assert_eq!(resp, received);
@@ -577,7 +591,9 @@ async fn ping_pong_exchange_over_socket() {
 
             // Adapter sends Pong
             let pong = AdapterMessage::Pong { seq };
-            write_adapter_message(&mut right_write, &pong).await.unwrap();
+            write_adapter_message(&mut right_write, &pong)
+                .await
+                .unwrap();
 
             // Driver receives Pong
             let received = read_adapter_message(&mut left_read).await.unwrap();

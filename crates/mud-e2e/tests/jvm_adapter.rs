@@ -178,9 +178,7 @@ async fn jvm_template_area_creation() {
     // Verify template placeholder substitution in a Kotlin source file
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/src/main/kotlin/MudArea.kt?repo=alice/myktor",
-        ))
+        .get(server.url("/api/editor/files/src/main/kotlin/MudArea.kt?repo=alice/myktor"))
         .send()
         .await
         .unwrap();
@@ -368,15 +366,16 @@ async fn jvm_migrations_run_on_load() {
         name VARCHAR(255) NOT NULL,\n\
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP\n\
     );\n";
-    let resp = server
-        .client
-        .post(server.url(
-            "/api/editor/files/db/migrations/V1__create_test_items.sql?repo=alice/migtest",
-        ))
-        .json(&json!({"content": migration_sql}))
-        .send()
-        .await
-        .unwrap();
+    let resp =
+        server
+            .client
+            .post(server.url(
+                "/api/editor/files/db/migrations/V1__create_test_items.sql?repo=alice/migtest",
+            ))
+            .json(&json!({"content": migration_sql}))
+            .send()
+            .await
+            .unwrap();
     assert!(
         resp.status().is_success(),
         "adding migration file should succeed: {}",
@@ -446,10 +445,7 @@ async fn jvm_ktor_api_backend() {
             if resp.status() == 200 {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     if let Some(sockets) = body["web_sockets"].as_array() {
-                        if sockets
-                            .iter()
-                            .any(|s| s.as_str() == Some("alice/apitest"))
-                        {
+                        if sockets.iter().any(|s| s.as_str() == Some("alice/apitest")) {
                             break;
                         }
                     }

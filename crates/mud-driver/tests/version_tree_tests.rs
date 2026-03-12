@@ -5,7 +5,9 @@ fn register_program_and_get_info() {
     let mut tree = VersionTree::new();
     tree.register("/world/npc.lpc", "lpc", vec![]);
 
-    let info = tree.get("/world/npc.lpc").expect("program should be registered");
+    let info = tree
+        .get("/world/npc.lpc")
+        .expect("program should be registered");
     assert_eq!(info.path, "/world/npc.lpc");
     assert_eq!(info.language, "lpc");
     assert_eq!(info.version, 1);
@@ -17,7 +19,9 @@ fn version_starts_at_1() {
     let mut tree = VersionTree::new();
     tree.register("/world/base.lpc", "lpc", vec![]);
 
-    let version = tree.version_of("/world/base.lpc").expect("should have version");
+    let version = tree
+        .version_of("/world/base.lpc")
+        .expect("should have version");
     assert_eq!(version, 1);
 }
 
@@ -26,10 +30,14 @@ fn bump_version_returns_incremented_value() {
     let mut tree = VersionTree::new();
     tree.register("/world/npc.lpc", "lpc", vec![]);
 
-    let v2 = tree.bump_version("/world/npc.lpc").expect("bump should succeed");
+    let v2 = tree
+        .bump_version("/world/npc.lpc")
+        .expect("bump should succeed");
     assert_eq!(v2, 2);
 
-    let v3 = tree.bump_version("/world/npc.lpc").expect("bump should succeed");
+    let v3 = tree
+        .bump_version("/world/npc.lpc")
+        .expect("bump should succeed");
     assert_eq!(v3, 3);
 
     // Verify via get as well
@@ -46,11 +54,7 @@ fn bump_version_unregistered_returns_none() {
 fn add_dependency_and_get_dependents() {
     let mut tree = VersionTree::new();
     tree.register("/world/base.lpc", "lpc", vec![]);
-    tree.register(
-        "/world/npc.lpc",
-        "lpc",
-        vec!["/world/base.lpc".to_string()],
-    );
+    tree.register("/world/npc.lpc", "lpc", vec!["/world/base.lpc".to_string()]);
 
     let dependents = tree.get_dependents("/world/base.lpc");
     assert_eq!(dependents, vec!["/world/npc.lpc"]);
@@ -88,7 +92,10 @@ fn walk_transitive_dependents_does_not_include_self() {
     tree.register("/b.lpc", "lpc", vec!["/a.lpc".to_string()]);
 
     let result = tree.walk_dependents("/a.lpc");
-    assert!(!result.contains(&"/a.lpc".to_string()), "self should not be in walk result");
+    assert!(
+        !result.contains(&"/a.lpc".to_string()),
+        "self should not be in walk result"
+    );
 }
 
 #[test]
@@ -140,16 +147,8 @@ fn diamond_dependency() {
     // Walk from A should return B, C, and any dependents of B and C (which is D)
     let mut tree = VersionTree::new();
     tree.register("/a.lpc", "lpc", vec![]);
-    tree.register(
-        "/b.lpc",
-        "lpc",
-        vec!["/a.lpc".to_string()],
-    );
-    tree.register(
-        "/c.lpc",
-        "lpc",
-        vec!["/a.lpc".to_string()],
-    );
+    tree.register("/b.lpc", "lpc", vec!["/a.lpc".to_string()]);
+    tree.register("/c.lpc", "lpc", vec!["/a.lpc".to_string()]);
     tree.register(
         "/d.lpc",
         "lpc",
@@ -164,7 +163,11 @@ fn diamond_dependency() {
     let mut from_a = tree.walk_dependents("/a.lpc");
     from_a.sort();
 
-    let mut expected = vec!["/b.lpc".to_string(), "/c.lpc".to_string(), "/d.lpc".to_string()];
+    let mut expected = vec![
+        "/b.lpc".to_string(),
+        "/c.lpc".to_string(),
+        "/d.lpc".to_string(),
+    ];
     expected.sort();
 
     assert_eq!(from_a, expected);
@@ -183,21 +186,13 @@ fn re_register_replaces_dependency_edges() {
     let mut tree = VersionTree::new();
     tree.register("/a.lpc", "lpc", vec![]);
     tree.register("/b.lpc", "lpc", vec![]);
-    tree.register(
-        "/c.lpc",
-        "lpc",
-        vec!["/a.lpc".to_string()],
-    );
+    tree.register("/c.lpc", "lpc", vec!["/a.lpc".to_string()]);
 
     assert_eq!(tree.get_dependents("/a.lpc"), vec!["/c.lpc"]);
     assert!(tree.get_dependents("/b.lpc").is_empty());
 
     // Re-register /c.lpc to depend on /b.lpc instead
-    tree.register(
-        "/c.lpc",
-        "lpc",
-        vec!["/b.lpc".to_string()],
-    );
+    tree.register("/c.lpc", "lpc", vec!["/b.lpc".to_string()]);
 
     assert!(
         tree.get_dependents("/a.lpc").is_empty(),

@@ -139,7 +139,13 @@ struct ModelsResponse {
 // ---------------------------------------------------------------------------
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    (status, Json(ErrorResponse { error: message.into() })).into_response()
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +182,10 @@ async fn stream_handler(
     let (provider, api_key, base_url_override): (Box<dyn AiProvider>, String, Option<String>) =
         if is_custom {
             // Parse custom provider ID from "custom:<id>"
-            let custom_id: i32 = match provider_name.strip_prefix("custom:").and_then(|s| s.parse().ok()) {
+            let custom_id: i32 = match provider_name
+                .strip_prefix("custom:")
+                .and_then(|s| s.parse().ok())
+            {
                 Some(id) => id,
                 None => {
                     return error_response(
@@ -296,9 +305,7 @@ async fn stream_handler(
     }
 
     // Build the reqwest request from ProviderRequest
-    let mut request_builder = state
-        .http_client
-        .post(&provider_req.url);
+    let mut request_builder = state.http_client.post(&provider_req.url);
 
     for (key, value) in &provider_req.headers {
         request_builder = request_builder.header(key.as_str(), value.as_str());
@@ -356,7 +363,15 @@ fn sse_forward_stream(
             Vec::<ai_providers::AnthropicSseEvent>::new(),
             provider,
         ),
-        |(mut stream, mut buf, mut raw_buf, mut current_event, mut current_data, mut pending, mut provider)| async move {
+        |(
+            mut stream,
+            mut buf,
+            mut raw_buf,
+            mut current_event,
+            mut current_data,
+            mut pending,
+            mut provider,
+        )| async move {
             loop {
                 // Drain any pending translated events first
                 if let Some(translated) = pending.pop() {
@@ -365,7 +380,15 @@ fn sse_forward_stream(
                         .data(translated.data);
                     return Some((
                         Ok(sse_event),
-                        (stream, buf, raw_buf, current_event, current_data, pending, provider),
+                        (
+                            stream,
+                            buf,
+                            raw_buf,
+                            current_event,
+                            current_data,
+                            pending,
+                            provider,
+                        ),
                     ));
                 }
 
@@ -392,12 +415,19 @@ fn sse_forward_stream(
 
                             // Drain first event immediately
                             if let Some(evt) = pending.pop() {
-                                let sse_event = Event::default()
-                                    .event(evt.event_type)
-                                    .data(evt.data);
+                                let sse_event =
+                                    Event::default().event(evt.event_type).data(evt.data);
                                 return Some((
                                     Ok(sse_event),
-                                    (stream, buf, raw_buf, current_event, current_data, pending, provider),
+                                    (
+                                        stream,
+                                        buf,
+                                        raw_buf,
+                                        current_event,
+                                        current_data,
+                                        pending,
+                                        provider,
+                                    ),
                                 ));
                             }
                         }
@@ -428,7 +458,9 @@ fn sse_forward_stream(
                                 let valid_up_to = e.valid_up_to();
                                 if valid_up_to > 0 {
                                     // Safety: we just verified this prefix is valid UTF-8
-                                    let valid = unsafe { std::str::from_utf8_unchecked(&raw_buf[..valid_up_to]) };
+                                    let valid = unsafe {
+                                        std::str::from_utf8_unchecked(&raw_buf[..valid_up_to])
+                                    };
                                     buf.push_str(valid);
                                 }
                                 // Keep the trailing incomplete bytes for the next chunk
@@ -443,7 +475,15 @@ fn sse_forward_stream(
                             .data(format!("Upstream error: {}", e));
                         return Some((
                             Ok(event),
-                            (stream, String::new(), Vec::new(), String::new(), String::new(), Vec::new(), provider),
+                            (
+                                stream,
+                                String::new(),
+                                Vec::new(),
+                                String::new(),
+                                String::new(),
+                                Vec::new(),
+                                provider,
+                            ),
                         ));
                     }
                     None => {
@@ -461,12 +501,19 @@ fn sse_forward_stream(
                             if let Some(evt) = translated.pop() {
                                 // Put remaining back as pending (though stream is ending)
                                 pending = translated;
-                                let sse_event = Event::default()
-                                    .event(evt.event_type)
-                                    .data(evt.data);
+                                let sse_event =
+                                    Event::default().event(evt.event_type).data(evt.data);
                                 return Some((
                                     Ok(sse_event),
-                                    (stream, String::new(), Vec::new(), String::new(), String::new(), pending, provider),
+                                    (
+                                        stream,
+                                        String::new(),
+                                        Vec::new(),
+                                        String::new(),
+                                        String::new(),
+                                        pending,
+                                        provider,
+                                    ),
                                 ));
                             }
                         }
@@ -509,18 +556,12 @@ async fn store_apikey_handler(
         .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "failed to store AI API key");
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to store API key",
-            )
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store API key")
         }
     }
 }
 
-async fn check_apikey_handler(
-    user: BuilderUser,
-    State(state): State<AppState>,
-) -> Response {
+async fn check_apikey_handler(user: BuilderUser, State(state): State<AppState>) -> Response {
     let ai_key_store = match &state.ai_key_store {
         Some(store) => store,
         None => {
@@ -532,10 +573,7 @@ async fn check_apikey_handler(
         }
     };
 
-    let statuses = match ai_key_store
-        .list_provider_statuses(&user.player_id)
-        .await
-    {
+    let statuses = match ai_key_store.list_provider_statuses(&user.player_id).await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(error = %e, "failed to list AI provider statuses");
@@ -546,10 +584,7 @@ async fn check_apikey_handler(
         }
     };
 
-    let custom = match ai_key_store
-        .list_custom_providers(&user.player_id)
-        .await
-    {
+    let custom = match ai_key_store.list_custom_providers(&user.player_id).await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "failed to list custom providers");
@@ -756,10 +791,7 @@ async fn delete_custom_provider_handler(
 // Preferences handlers
 // ---------------------------------------------------------------------------
 
-async fn get_preferences_handler(
-    user: BuilderUser,
-    State(state): State<AppState>,
-) -> Response {
+async fn get_preferences_handler(user: BuilderUser, State(state): State<AppState>) -> Response {
     let ai_key_store = match &state.ai_key_store {
         Some(store) => store,
         None => {
@@ -837,18 +869,12 @@ async fn set_preferences_handler(
 // Models handler
 // ---------------------------------------------------------------------------
 
-async fn list_models_handler(
-    user: BuilderUser,
-    State(state): State<AppState>,
-) -> Response {
+async fn list_models_handler(user: BuilderUser, State(state): State<AppState>) -> Response {
     let mut providers = HashMap::new();
 
     // Only list models for enabled built-in providers
     if let Some(ref ai_key_store) = state.ai_key_store {
-        if let Ok(statuses) = ai_key_store
-            .list_provider_statuses(&user.player_id)
-            .await
-        {
+        if let Ok(statuses) = ai_key_store.list_provider_statuses(&user.player_id).await {
             for (name, status) in &statuses {
                 if status.enabled {
                     if let Some(provider) = ai_providers::get_provider(name) {
@@ -859,10 +885,7 @@ async fn list_models_handler(
         }
 
         // Include custom provider models
-        if let Ok(custom_providers) = ai_key_store
-            .list_custom_providers(&user.player_id)
-            .await
-        {
+        if let Ok(custom_providers) = ai_key_store.list_custom_providers(&user.player_id).await {
             for cp in &custom_providers {
                 if cp.enabled {
                     let key = format!("custom:{}", cp.id);
@@ -907,10 +930,7 @@ async fn list_skills_handler(State(state): State<AppState>) -> Response {
     Json(skills).into_response()
 }
 
-async fn get_skill_handler(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Response {
+async fn get_skill_handler(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     let skills_service = match &state.skills_service {
         Some(svc) => svc,
         None => {
@@ -923,9 +943,6 @@ async fn get_skill_handler(
 
     match skills_service.get_skill(&name).await {
         Some(skill) => Json(skill).into_response(),
-        None => error_response(
-            StatusCode::NOT_FOUND,
-            format!("Skill '{}' not found", name),
-        ),
+        None => error_response(StatusCode::NOT_FOUND, format!("Skill '{}' not found", name)),
     }
 }

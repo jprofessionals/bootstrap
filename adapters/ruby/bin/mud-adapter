@@ -293,8 +293,14 @@ module MudAdapter
           return
         end
 
-        # Call the web_data block with the area
-        data = config.data_block.call(area) || {}
+        helpers = MudAdapter::Stdlib::World::WebDataHelpers.new(
+          server_name: portal_server_name,
+          session_handler: @session_handler
+        )
+
+        # Call the web_data block with the area and helper methods expected by
+        # the stdlib template contract.
+        data = config.data_block.call(area, helpers) || {}
 
         @client.send_message(
           "type" => "call_result",
@@ -313,6 +319,10 @@ module MudAdapter
 
     def log(message)
       $stderr.puts("[mud-adapter] #{message}")
+    end
+
+    def portal_server_name
+      MudAdapter::Stdlib::Portal::BaseApp.server_name_value || "MUD Driver"
     end
   end
 end

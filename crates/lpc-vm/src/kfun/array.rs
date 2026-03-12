@@ -1,7 +1,7 @@
 //! Array operation kfuns: allocate, allocate_int, allocate_float, sizeof, sort_array.
 
+use super::{require_array, require_int, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_int, require_string, require_array};
 
 /// allocate(int size) -> mixed*
 ///
@@ -77,18 +77,17 @@ pub fn kf_sort_array(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcVal
             (LpcValue::String(x), LpcValue::String(y)) => x.cmp(y),
             // Different types: sort by type discriminant
             _ => {
-                let type_ord =
-                    |v: &LpcValue| -> u8 {
-                        match v {
-                            LpcValue::Nil => 0,
-                            LpcValue::Int(_) => 1,
-                            LpcValue::Float(_) => 2,
-                            LpcValue::String(_) => 3,
-                            LpcValue::Array(_) => 4,
-                            LpcValue::Mapping(_) => 5,
-                            LpcValue::Object(_) => 6,
-                        }
-                    };
+                let type_ord = |v: &LpcValue| -> u8 {
+                    match v {
+                        LpcValue::Nil => 0,
+                        LpcValue::Int(_) => 1,
+                        LpcValue::Float(_) => 2,
+                        LpcValue::String(_) => 3,
+                        LpcValue::Array(_) => 4,
+                        LpcValue::Mapping(_) => 5,
+                        LpcValue::Object(_) => 6,
+                    }
+                };
                 type_ord(a).cmp(&type_ord(b))
             }
         }

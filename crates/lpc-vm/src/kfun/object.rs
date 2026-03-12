@@ -2,8 +2,8 @@
 //! new_object, destruct_object, find_object, object_name, function_object,
 //! compile_object, this_user, call_touch, call_other, previous_program.
 
+use super::{require_object, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_object, require_string};
 
 /// this_object() -> object
 ///
@@ -75,10 +75,7 @@ pub fn kf_new_object(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcVal
 /// Destroy an object, removing it from the object table.
 ///
 /// TODO: Full implementation requires VM object table.
-pub fn kf_destruct_object(
-    _ctx: &mut KfunContext,
-    args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_destruct_object(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     let _obj = require_object(&args[0], 0)?;
     // TODO: Requires VM object table integration
     Err(LpcError::RuntimeError(
@@ -119,10 +116,7 @@ pub fn kf_object_name(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcVa
 /// given object. Returns nil if the function doesn't exist.
 ///
 /// TODO: Full implementation requires VM program table.
-pub fn kf_function_object(
-    _ctx: &mut KfunContext,
-    args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_function_object(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     let _func = require_string(&args[0], 0)?;
     let obj = require_object(&args[1], 1)?;
     // Stub: return the object's own path as the function origin
@@ -134,10 +128,7 @@ pub fn kf_function_object(
 /// Compile (or recompile) an LPC source file.
 ///
 /// TODO: Full implementation requires driver services (file I/O, compiler).
-pub fn kf_compile_object(
-    _ctx: &mut KfunContext,
-    args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_compile_object(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     let _path = require_string(&args[0], 0)?;
     // TODO: Requires driver services integration (MOP)
     Err(LpcError::RuntimeError(

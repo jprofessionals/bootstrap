@@ -4,8 +4,8 @@
 
 use rand::Rng;
 
+use super::{require_float, require_int, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_float, require_int};
 
 /// Helper: apply a single-argument float function with NaN/Inf checking.
 fn float_unary(
@@ -230,8 +230,7 @@ pub fn kf_frexp(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, L
     }
 
     let exponent = exponent_biased - 1022; // -1023 + 1 to get mantissa in [0.5, 1.0)
-    let mantissa =
-        f64::from_bits((0x3FE0_0000_0000_0000u64) | mantissa_bits) * sign;
+    let mantissa = f64::from_bits((0x3FE0_0000_0000_0000u64) | mantissa_bits) * sign;
 
     Ok(LpcValue::Array(vec![
         LpcValue::Float(mantissa),

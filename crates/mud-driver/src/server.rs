@@ -27,7 +27,7 @@ use crate::ssh::handler::SshCommand;
 use crate::ssh::server::start_ssh_server;
 use crate::web::build_log::BuildLog;
 use crate::web::build_manager::BuildManager;
-use crate::web::server::{AppState, WebServer, init_templates};
+use crate::web::server::{init_templates, AppState, WebServer};
 use crate::web::skills::SkillsService;
 
 // ---------------------------------------------------------------------------
@@ -146,12 +146,13 @@ impl Server {
     /// when running in parallel.
     pub fn new_with_socket_path(config: Config, socket_path: std::path::PathBuf) -> Self {
         let adapter_manager = AdapterManager::new(socket_path);
-        let master_log_path = Some(
-            config.world.resolved_path().join(".mud").join("driver.log"),
-        );
+        let master_log_path = Some(config.world.resolved_path().join(".mud").join("driver.log"));
         let build_log = Arc::new(BuildLog::new(200));
         let build_cache_path = std::path::PathBuf::from(&config.http.build_cache_path);
-        let build_manager = Some(Arc::new(BuildManager::new(Arc::clone(&build_log), build_cache_path)));
+        let build_manager = Some(Arc::new(BuildManager::new(
+            Arc::clone(&build_log),
+            build_cache_path,
+        )));
 
         // Create the MOP RPC channel for web-handler-to-adapter communication.
         let (mop_rpc_tx, mop_rpc_rx) = mpsc::channel::<MopRequest>(32);
@@ -196,13 +197,7 @@ impl Server {
             .context("starting adapter manager")?;
 
         // Count how many adapters are enabled so we know how many to wait for.
-        let mut expected_adapters = 0u32;
-        if self.config.adapters.ruby.as_ref().is_some_and(|r| r.enabled) {
-            expected_adapters += 1;
-        }
-        if self.config.adapters.jvm.as_ref().is_some_and(|j| j.enabled) {
-            expected_adapters += 1;
-        }
+        let expected_adapters = enabled_adapter_count(&self.config);
 
         info!(expected_adapters, "Waiting for adapters (30s timeout)...");
 
@@ -212,14 +207,22 @@ impl Server {
                 self.adapter_manager.accept_connection(&listener),
             )
             .await
-            .map_err(|_| anyhow::anyhow!(
-                "timed out waiting for adapter {}/{} to connect (30s). \
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "timed out waiting for adapter {}/{} to connect (30s). \
                  Check that the adapter binary exists and is configured.",
-                i + 1, expected_adapters,
-            ))?
+                    i + 1,
+                    expected_adapters,
+                )
+            })?
             .context("accepting adapter connection")?;
 
-            info!(language, adapter = i + 1, total = expected_adapters, "Adapter connected");
+            info!(
+                language,
+                adapter = i + 1,
+                total = expected_adapters,
+                "Adapter connected"
+            );
             self.adapter_primary_languages.push(language.clone());
             self.adapter_languages.push(language);
             for lang in additional {
@@ -250,21 +253,20 @@ impl Server {
             if let (Some(ps), Some(rm), Some(ws)) =
                 (&self.player_store, &self.repo_manager, &self.workspace)
             {
-                let templates = Arc::new(
-                    init_templates().context("initializing web templates")?,
-                );
+                let templates = Arc::new(init_templates().context("initializing web templates")?);
 
                 // Build AiKeyStore — reuse encryptor from database setup.
-                let ai_key_store = if let (Some(db_mgr), Some(encryptor)) = (&self.db_manager, &self.encryptor) {
-                    info!("AI key store initialized");
-                    Some(Arc::new(AiKeyStore::new(
-                        db_mgr.driver_pool().clone(),
-                        Arc::clone(encryptor),
-                    )))
-                } else {
-                    info!("AI key store not configured (no database manager or encryptor)");
-                    None
-                };
+                let ai_key_store =
+                    if let (Some(db_mgr), Some(encryptor)) = (&self.db_manager, &self.encryptor) {
+                        info!("AI key store initialized");
+                        Some(Arc::new(AiKeyStore::new(
+                            db_mgr.driver_pool().clone(),
+                            Arc::clone(encryptor),
+                        )))
+                    } else {
+                        info!("AI key store not configured (no database manager or encryptor)");
+                        None
+                    };
 
                 // Build SkillsService from AI config
                 let skills_service = match SkillsService::new(&self.config.ai).await {
@@ -430,14 +432,11 @@ impl Server {
                 if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&contents) {
                     // Check for explicit language field first.
                     if let Some(language) = yaml.get("language").and_then(|v| v.as_str()) {
-                        if language == "lpc"
-                            && self.adapter_languages.iter().any(|l| l == "lpc")
-                        {
+                        if language == "lpc" && self.adapter_languages.iter().any(|l| l == "lpc") {
                             info!(path = %area_path, %language, "Routing area to lpc adapter");
                             return "lpc".to_string();
                         }
-                        if language == "rust"
-                            && self.adapter_languages.iter().any(|l| l == "rust")
+                        if language == "rust" && self.adapter_languages.iter().any(|l| l == "rust")
                         {
                             info!(path = %area_path, %language, "Routing area to rust adapter");
                             return "rust".to_string();
@@ -446,9 +445,7 @@ impl Server {
 
                     // Check for framework field.
                     if let Some(framework) = yaml.get("framework").and_then(|v| v.as_str()) {
-                        if framework == "lpc"
-                            && self.adapter_languages.iter().any(|l| l == "lpc")
-                        {
+                        if framework == "lpc" && self.adapter_languages.iter().any(|l| l == "lpc") {
                             info!(path = %area_path, %framework, "Routing area to lpc adapter");
                             return "lpc".to_string();
                         }
@@ -521,10 +518,7 @@ impl Server {
 
     /// Accept an adapter connection on the given listener, storing the
     /// adapter language(s) for subsequent session calls.
-    pub async fn accept_adapter(
-        &mut self,
-        listener: &tokio::net::UnixListener,
-    ) -> Result<String> {
+    pub async fn accept_adapter(&mut self, listener: &tokio::net::UnixListener) -> Result<String> {
         let (language, additional) = self
             .adapter_manager
             .accept_connection(listener)
@@ -576,7 +570,12 @@ impl Server {
     pub async fn send_configure(&self, stdlib_db_url: String) -> Result<()> {
         for lang in &self.adapter_primary_languages {
             self.adapter_manager
-                .send_to(lang, DriverMessage::Configure { stdlib_db_url: stdlib_db_url.clone() })
+                .send_to(
+                    lang,
+                    DriverMessage::Configure {
+                        stdlib_db_url: stdlib_db_url.clone(),
+                    },
+                )
                 .await
                 .with_context(|| format!("sending configure to {lang} adapter"))?;
         }
@@ -605,7 +604,14 @@ impl Server {
             };
 
             self.adapter_manager
-                .send_to(&lang, DriverMessage::LoadArea { area_id, path, db_url })
+                .send_to(
+                    &lang,
+                    DriverMessage::LoadArea {
+                        area_id,
+                        path,
+                        db_url,
+                    },
+                )
                 .await
                 .context("sending LoadArea to adapter")?;
         }
@@ -631,10 +637,10 @@ impl Server {
                 Some(k) => k.clone(),
                 None => load_or_generate_encryption_key(&self.config.world.data_path)?,
             };
-            let key_bytes = hex::decode(&key_hex)
-                .context("decoding encryption_key as hex")?;
-            Some(Arc::new(CredentialEncryptor::new(&key_bytes)
-                .context("creating credential encryptor")?))
+            let key_bytes = hex::decode(&key_hex).context("decoding encryption_key as hex")?;
+            Some(Arc::new(
+                CredentialEncryptor::new(&key_bytes).context("creating credential encryptor")?,
+            ))
         };
 
         let db_manager = DatabaseManager::new(&self.config.database, encryptor.clone())
@@ -723,13 +729,12 @@ impl Server {
 
     /// Unified event loop: handle SSH commands, adapter messages, and MOP RPC
     /// requests from web handlers using `tokio::select!`.
-    async fn run_event_loop(
-        &mut self,
-        mut ssh_cmd_rx: mpsc::Receiver<SshCommand>,
-    ) -> Result<()> {
+    async fn run_event_loop(&mut self, mut ssh_cmd_rx: mpsc::Receiver<SshCommand>) -> Result<()> {
         // Take the receiver out of the Option so we can use it in the loop.
         // If it was already taken (shouldn't happen), create a dummy channel.
-        let mut mop_rpc_rx = self.mop_rpc_rx.take()
+        let mut mop_rpc_rx = self
+            .mop_rpc_rx
+            .take()
             .unwrap_or_else(|| mpsc::channel::<MopRequest>(1).1);
 
         loop {
@@ -761,16 +766,26 @@ impl Server {
     async fn handle_mop_rpc_request(&mut self, rpc_req: MopRequest) {
         let rpc_id = self.next_rpc_id;
         self.next_rpc_id += 1;
+        let MopRequest {
+            message,
+            target_language,
+            response_tx,
+        } = rpc_req;
 
         // Replace the request_id in the message with our assigned ID.
-        let message = replace_request_id(rpc_req.message, rpc_id);
+        let message = replace_request_id(message, rpc_id);
 
         // Store the oneshot sender so we can deliver the response later.
-        self.pending_rpc.insert(rpc_id, rpc_req.response_tx);
+        self.pending_rpc.insert(rpc_id, response_tx);
 
-        // Send to the primary adapter (Ruby handles portal RPC).
-        let lang = self.primary_language();
-        if let Err(e) = self.adapter_manager.send_to(lang, message).await {
+        // Area-specific web RPCs can target a non-primary adapter.
+        let target_language =
+            target_language.unwrap_or_else(|| self.primary_language().to_string());
+        if let Err(e) = self
+            .adapter_manager
+            .send_to(&target_language, message)
+            .await
+        {
             error!(%e, rpc_id, "failed to send MOP RPC request to adapter");
             if let Some(tx) = self.pending_rpc.remove(&rpc_id) {
                 let _ = tx.send(Err(format!("adapter send failed: {e}")));
@@ -874,10 +889,7 @@ impl Server {
                     warn!(request_id, "received CallResult for unknown RPC request");
                 }
             }
-            AdapterMessage::CallError {
-                request_id,
-                error,
-            } => {
+            AdapterMessage::CallError { request_id, error } => {
                 if !self.complete_rpc(request_id, Err(error.clone())) {
                     warn!(request_id, %error, "received CallError for unknown RPC request");
                 }
@@ -888,7 +900,9 @@ impl Server {
                 params,
             } => {
                 info!(%request_id, %action, source = %source_lang, "Processing driver request");
-                let response = self.handle_driver_request(request_id, &action, params).await;
+                let response = self
+                    .handle_driver_request(request_id, &action, params)
+                    .await;
                 if let Err(e) = self.adapter_manager.send_to(&source_lang, response).await {
                     error!(%e, "failed to send request response to {}", source_lang);
                 }
@@ -928,10 +942,22 @@ impl Server {
             "workspace_log" => return self.handle_workspace_log(request_id, params).await,
             "workspace_commit" => return self.handle_workspace_commit(request_id, params).await,
             "workspace_pull" => return self.handle_workspace_pull(request_id, params).await,
-            "workspace_checkout" => return self.handle_workspace_checkout(request_id, params).await,
-            "workspace_checkout_branch" => return self.handle_workspace_checkout_branch(request_id, params).await,
-            "workspace_branches" => return self.handle_workspace_branches(request_id, params).await,
-            "workspace_create_branch" => return self.handle_workspace_create_branch(request_id, params).await,
+            "workspace_checkout" => {
+                return self.handle_workspace_checkout(request_id, params).await
+            }
+            "workspace_checkout_branch" => {
+                return self
+                    .handle_workspace_checkout_branch(request_id, params)
+                    .await
+            }
+            "workspace_branches" => {
+                return self.handle_workspace_branches(request_id, params).await
+            }
+            "workspace_create_branch" => {
+                return self
+                    .handle_workspace_create_branch(request_id, params)
+                    .await
+            }
             "mr_create" => return self.handle_mr_create(request_id, params).await,
             "mr_get" => return self.handle_mr_get(request_id, params).await,
             "mr_list_all" => return self.handle_mr_list_all(request_id, params).await,
@@ -961,6 +987,7 @@ impl Server {
                     .await
             }
             "session_create" => self.handle_session_create(request_id, ps, params).await,
+            "session_validate" => self.handle_session_validate(request_id, ps, params).await,
             "session_destroy" => self.handle_session_destroy(request_id, ps, params).await,
             "player_switch_character" => {
                 self.handle_player_switch_character(request_id, ps, params)
@@ -1096,7 +1123,11 @@ impl Server {
         // Create a default git area for the new builder account.
         if let Some(rm) = &self.repo_manager {
             let templates = self.area_templates.read().await;
-            let template = self.config.adapters.default_template.as_ref()
+            let template = self
+                .config
+                .adapters
+                .default_template
+                .as_ref()
                 .and_then(|name| templates.get(name))
                 .or_else(|| templates.get("default"))
                 .or_else(|| templates.values().next());
@@ -1236,6 +1267,44 @@ impl Server {
         }
     }
 
+    /// Validate a session token for the given account.
+    async fn handle_session_validate(
+        &self,
+        request_id: u64,
+        ps: &PlayerStore,
+        params: Value,
+    ) -> DriverMessage {
+        let account = match get_string_param(&params, "account") {
+            Some(a) => a,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'account' parameter".into(),
+                };
+            }
+        };
+        let token = match get_string_param(&params, "token") {
+            Some(t) => t,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'token' parameter".into(),
+                };
+            }
+        };
+
+        match ps.valid_session(&account, &token).await {
+            Ok(valid) => DriverMessage::RequestResponse {
+                request_id,
+                result: Value::Bool(valid),
+            },
+            Err(e) => DriverMessage::RequestError {
+                request_id,
+                error: format!("failed to validate session: {}", e),
+            },
+        }
+    }
+
     /// Switch the active character for a player.
     async fn handle_player_switch_character(
         &self,
@@ -1352,11 +1421,7 @@ impl Server {
 
     /// Store the area template files provided by the adapter.
     /// The adapter sends a map of `{ "files": { "path": "content", ... } }`.
-    async fn handle_set_area_template(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
+    async fn handle_set_area_template(&self, request_id: u64, params: Value) -> DriverMessage {
         let (name, files) = match &params {
             Value::Map(m) => {
                 let name = match m.get("name") {
@@ -1504,17 +1569,14 @@ impl Server {
     }
 
     /// Register a per-area web socket path for API proxying.
-    async fn handle_register_area_web(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
-        let area_key = get_string_param(&params, "area_key")
-            .unwrap_or_default();
-        let socket_path = get_string_param(&params, "socket_path")
-            .unwrap_or_default();
+    async fn handle_register_area_web(&self, request_id: u64, params: Value) -> DriverMessage {
+        let area_key = get_string_param(&params, "area_key").unwrap_or_default();
+        let socket_path = get_string_param(&params, "socket_path").unwrap_or_default();
         info!(area_key = %area_key, socket_path = %socket_path, "Area web socket registered");
-        self.area_web_sockets.write().await.insert(area_key, socket_path);
+        self.area_web_sockets
+            .write()
+            .await
+            .insert(area_key, socket_path);
         DriverMessage::RequestResponse {
             request_id,
             result: Value::Bool(true),
@@ -1522,11 +1584,7 @@ impl Server {
     }
 
     /// Create a new git repository.
-    async fn handle_repo_create(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
+    async fn handle_repo_create(&self, request_id: u64, params: Value) -> DriverMessage {
         let rm = match &self.repo_manager {
             Some(rm) => rm,
             None => {
@@ -1596,11 +1654,7 @@ impl Server {
     }
 
     /// List repositories in a namespace.
-    async fn handle_repo_list(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
+    async fn handle_repo_list(&self, request_id: u64, params: Value) -> DriverMessage {
         let rm = match &self.repo_manager {
             Some(rm) => rm,
             None => {
@@ -1635,11 +1689,7 @@ impl Server {
     }
 
     /// Check whether a user has access to a repository.
-    async fn handle_repo_check_access(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
+    async fn handle_repo_check_access(&self, request_id: u64, params: Value) -> DriverMessage {
         let rm = match &self.repo_manager {
             Some(rm) => rm,
             None => {
@@ -1690,11 +1740,7 @@ impl Server {
     }
 
     /// Reload an area by sending ReloadArea to the appropriate adapter.
-    async fn handle_area_reload(
-        &self,
-        request_id: u64,
-        params: Value,
-    ) -> DriverMessage {
+    async fn handle_area_reload(&self, request_id: u64, params: Value) -> DriverMessage {
         if self.adapter_languages.is_empty() {
             return DriverMessage::RequestError {
                 request_id,
@@ -1864,10 +1910,7 @@ impl Server {
                         m.insert("oid".to_string(), Value::String(c.oid));
                         m.insert("message".to_string(), Value::String(c.message));
                         m.insert("author".to_string(), Value::String(c.author));
-                        m.insert(
-                            "time".to_string(),
-                            Value::String(c.time.to_rfc3339()),
-                        );
+                        m.insert("time".to_string(), Value::String(c.time.to_rfc3339()));
                         Value::Map(m)
                     })
                     .collect();
@@ -1939,10 +1982,18 @@ impl Server {
                 if let Some(ref build_manager) = self.build_manager {
                     let (area_path, area_key, base_url) = if branch == "develop" {
                         let path = ws.dev_path(&ns, &name);
-                        (path, format!("{ns}/{name}@dev"), format!("/project/{ns}/{name}@dev/"))
+                        (
+                            path,
+                            format!("{ns}/{name}@dev"),
+                            format!("/project/{ns}/{name}@dev/"),
+                        )
                     } else {
                         let path = ws.workspace_path(&ns, &name);
-                        (path, format!("{ns}/{name}"), format!("/project/{ns}/{name}/"))
+                        (
+                            path,
+                            format!("{ns}/{name}"),
+                            format!("/project/{ns}/{name}/"),
+                        )
                     };
                     if BuildManager::is_spa(&area_path) {
                         build_manager.trigger_build(area_key, area_path, base_url);
@@ -2393,10 +2444,7 @@ impl Server {
                 m.insert("approver".to_string(), Value::String(approval.approver));
                 m.insert(
                     "comment".to_string(),
-                    approval
-                        .comment
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
+                    approval.comment.map(Value::String).unwrap_or(Value::Null),
                 );
                 DriverMessage::RequestResponse {
                     request_id,
@@ -2529,7 +2577,11 @@ impl Server {
             "area": area,
             "message": message,
         });
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(f, "{}", entry);
         }
     }
@@ -2640,9 +2692,7 @@ fn get_int_param(params: &Value, key: &str) -> Option<i64> {
 /// returns those that:
 /// Recursively collect all files under `dir` into a `HashMap<String, String>`
 /// where keys are relative paths and values are file contents (UTF-8).
-fn collect_template_files(
-    dir: &std::path::Path,
-) -> Result<HashMap<String, String>> {
+fn collect_template_files(dir: &std::path::Path) -> Result<HashMap<String, String>> {
     let mut files = HashMap::new();
     collect_files_recursive(dir, dir, &mut files)?;
     Ok(files)
@@ -2653,8 +2703,8 @@ fn collect_files_recursive(
     current: &std::path::Path,
     files: &mut HashMap<String, String>,
 ) -> Result<()> {
-    for entry in std::fs::read_dir(current)
-        .with_context(|| format!("reading dir: {}", current.display()))?
+    for entry in
+        std::fs::read_dir(current).with_context(|| format!("reading dir: {}", current.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -2686,8 +2736,8 @@ fn collect_files_recursive(
 pub fn discover_areas(world_path: &str) -> Result<Vec<(AreaId, String)>> {
     let pattern = format!("{world_path}/*/*");
 
-    let entries = glob::glob(&pattern)
-        .with_context(|| format!("invalid glob pattern: {pattern}"))?;
+    let entries =
+        glob::glob(&pattern).with_context(|| format!("invalid glob pattern: {pattern}"))?;
 
     let mut areas = Vec::new();
 
@@ -2780,9 +2830,24 @@ fn load_or_generate_encryption_key(data_path: &str) -> Result<String> {
     Ok(hex_key)
 }
 
+fn enabled_adapter_count(config: &Config) -> u32 {
+    let mut count = 0u32;
+    if config.adapters.ruby.as_ref().is_some_and(|r| r.enabled) {
+        count += 1;
+    }
+    if config.adapters.jvm.as_ref().is_some_and(|j| j.enabled) {
+        count += 1;
+    }
+    if config.adapters.lpc.as_ref().is_some_and(|l| l.enabled) {
+        count += 1;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{JvmAdapterConfig, LpcAdapterConfig, RubyAdapterConfig};
 
     // -- SessionState tests --
 
@@ -2862,5 +2927,24 @@ mod tests {
 
         assert_eq!(rx1.try_recv().unwrap(), "msg1");
         assert_eq!(rx2.try_recv().unwrap(), "msg2");
+    }
+
+    #[test]
+    fn enabled_adapter_count_includes_lpc() {
+        let mut config = Config::default();
+        config.adapters.ruby = Some(RubyAdapterConfig {
+            enabled: true,
+            ..RubyAdapterConfig::default()
+        });
+        config.adapters.jvm = Some(JvmAdapterConfig {
+            enabled: true,
+            ..JvmAdapterConfig::default()
+        });
+        config.adapters.lpc = Some(LpcAdapterConfig {
+            enabled: true,
+            ..LpcAdapterConfig::default()
+        });
+
+        assert_eq!(enabled_adapter_count(&config), 3);
     }
 }

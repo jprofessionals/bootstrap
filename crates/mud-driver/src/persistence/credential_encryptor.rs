@@ -15,10 +15,7 @@ impl CredentialEncryptor {
     /// Create a new encryptor. Key must be exactly 32 bytes.
     pub fn new(key: &[u8]) -> Result<Self> {
         if key.len() != 32 {
-            bail!(
-                "encryption key must be exactly 32 bytes, got {}",
-                key.len()
-            );
+            bail!("encryption key must be exactly 32 bytes, got {}", key.len());
         }
         let cipher = Aes256Gcm::new_from_slice(key)
             .map_err(|e| anyhow::anyhow!("invalid encryption key: {}", e))?;

@@ -159,13 +159,7 @@ impl Workspace {
     }
 
     /// Get the commit log for a branch, up to `limit` entries.
-    pub fn log(
-        &self,
-        ns: &str,
-        name: &str,
-        branch: &str,
-        limit: usize,
-    ) -> Result<Vec<CommitInfo>> {
+    pub fn log(&self, ns: &str, name: &str, branch: &str, limit: usize) -> Result<Vec<CommitInfo>> {
         let work_path = self.path_for_branch(ns, name, branch);
         let repo = git2::Repository::open(&work_path)?;
 
@@ -486,12 +480,24 @@ mod tests {
         // Template files should be present in the checked-out workspace
         let prod = ws.workspace_path("testns", "village");
         assert!(prod.join(".meta.yml").exists(), ".meta.yml should exist");
-        assert!(prod.join("mud_aliases.rb").exists(), "mud_aliases.rb should exist");
-        assert!(prod.join("rooms/entrance.rb").exists(), "rooms/entrance.rb should exist");
+        assert!(
+            prod.join("mud_aliases.rb").exists(),
+            "mud_aliases.rb should exist"
+        );
+        assert!(
+            prod.join("rooms/entrance.rb").exists(),
+            "rooms/entrance.rb should exist"
+        );
 
         let entrance = std::fs::read_to_string(prod.join("rooms/entrance.rb")).unwrap();
-        assert!(entrance.contains("class Entrance < Room"), "entrance.rb should contain class definition");
-        assert!(entrance.contains("Welcome to village"), "entrance.rb should contain area name");
+        assert!(
+            entrance.contains("class Entrance < Room"),
+            "entrance.rb should contain class definition"
+        );
+        assert!(
+            entrance.contains("Welcome to village"),
+            "entrance.rb should contain area name"
+        );
     }
 
     #[test]
@@ -510,12 +516,24 @@ mod tests {
         // Should now be a valid git repo with template files
         assert!(git2::Repository::open(&prod).is_ok());
         assert!(prod.join(".meta.yml").exists(), ".meta.yml should exist");
-        assert!(prod.join("mud_aliases.rb").exists(), "mud_aliases.rb should exist");
-        assert!(prod.join("rooms/entrance.rb").exists(), "rooms/entrance.rb should exist");
+        assert!(
+            prod.join("mud_aliases.rb").exists(),
+            "mud_aliases.rb should exist"
+        );
+        assert!(
+            prod.join("rooms/entrance.rb").exists(),
+            "rooms/entrance.rb should exist"
+        );
 
         let aliases = std::fs::read_to_string(prod.join("mud_aliases.rb")).unwrap();
-        assert!(aliases.contains("Room = MUD::Stdlib::World::Room"), "mud_aliases.rb should contain Room alias");
-        assert!(aliases.contains("Daemon = MUD::Stdlib::World::Daemon"), "mud_aliases.rb should contain Daemon alias");
+        assert!(
+            aliases.contains("Room = MUD::Stdlib::World::Room"),
+            "mud_aliases.rb should contain Room alias"
+        );
+        assert!(
+            aliases.contains("Daemon = MUD::Stdlib::World::Daemon"),
+            "mud_aliases.rb should contain Daemon alias"
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@ use russh::keys::{Algorithm, PrivateKey};
 use russh::server::Server as _;
 use tokio::sync::mpsc;
 
+use super::handler::{SshCommand, SshHandler};
 use crate::config::SshConfig;
 use crate::persistence::player_store::PlayerStore;
-use super::handler::{SshCommand, SshHandler};
 
 // ---------------------------------------------------------------------------
 // MudSshServer — the `russh::server::Server` factory
@@ -82,7 +82,10 @@ pub async fn start_ssh_server(
     tcp_socket.bind(addr)?;
     let socket = tcp_socket.listen(128)?;
 
-    let mut server = MudSshServer { command_tx, player_store };
+    let mut server = MudSshServer {
+        command_tx,
+        player_store,
+    };
     server.run_on_socket(server_config, &socket).await?;
 
     Ok(())

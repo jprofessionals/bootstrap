@@ -204,7 +204,10 @@ impl MergeRequestManager {
 
             // 8. Create merge commit with both parents
             let sig = git2::Signature::now("MUD Driver", "mud@localhost")?;
-            let message = format!("Merge '{}' into {}: {}", source_branch, target_branch, title);
+            let message = format!(
+                "Merge '{}' into {}: {}",
+                source_branch, target_branch, title
+            );
 
             repo.commit(
                 Some(&format!("refs/heads/{}", target_branch)),

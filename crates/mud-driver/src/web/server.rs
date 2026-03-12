@@ -77,7 +77,11 @@ impl WebServer {
 
         // Sub-routers that manage their own state (return Router<()>).
         // These must be added via nest_service since the main router uses AppState.
-        let editor = editor_file_routes(world_path.clone(), self.state.mop_rpc.clone(), self.state.portal_socket.clone());
+        let editor = editor_file_routes(
+            world_path.clone(),
+            self.state.mop_rpc.clone(),
+            self.state.portal_socket.clone(),
+        );
         let builder = build_log_routes(self.state.build_log.clone());
         let repos = repos_routes(
             self.state.repo_manager.clone(),
@@ -131,7 +135,13 @@ async fn area_status_handler(
     State(state): State<AppState>,
 ) -> axum::Json<serde_json::Value> {
     let loaded: Vec<String> = state.loaded_areas.read().await.iter().cloned().collect();
-    let web_sockets: Vec<String> = state.area_web_sockets.read().await.keys().cloned().collect();
+    let web_sockets: Vec<String> = state
+        .area_web_sockets
+        .read()
+        .await
+        .keys()
+        .cloned()
+        .collect();
     axum::Json(serde_json::json!({
         "loaded_areas": loaded,
         "web_sockets": web_sockets,
@@ -159,10 +169,7 @@ async fn welcome_handler(State(state): State<AppState>) -> Html<String> {
 
 /// Forwards an incoming request to the Ruby portal via a Unix domain socket
 /// and returns the upstream response as-is.
-async fn proxy_handler(
-    State(state): State<AppState>,
-    req: Request,
-) -> Response {
+async fn proxy_handler(State(state): State<AppState>, req: Request) -> Response {
     let socket_path = &state.portal_socket;
 
     // Connect to the portal Unix socket.
@@ -180,17 +187,16 @@ async fn proxy_handler(
     let io = TokioIo::new(stream);
 
     // Establish an HTTP/1.1 connection over the Unix socket.
-    let (mut sender, conn) =
-        match hyper::client::conn::http1::handshake(io).await {
-            Ok(parts) => parts,
-            Err(e) => {
-                tracing::error!(error = %e, "portal handshake failed");
-                return Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .body(Body::from(format!("Handshake failed: {}", e)))
-                    .unwrap();
-            }
-        };
+    let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
+        Ok(parts) => parts,
+        Err(e) => {
+            tracing::error!(error = %e, "portal handshake failed");
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from(format!("Handshake failed: {}", e)))
+                .unwrap();
+        }
+    };
 
     // Drive the connection in a background task.
     tokio::spawn(async move {
@@ -202,7 +208,11 @@ async fn proxy_handler(
     // Rebuild the request URI with only path + query (no scheme/authority
     // since we are speaking over a Unix socket).
     let path = req.uri().path();
-    let query = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
     let path_and_query = format!("{}{}", path, query);
 
     let method = req.method().clone();
@@ -240,9 +250,7 @@ async fn proxy_handler(
 
     // Convert the hyper response into an axum response.
     let (parts, body) = upstream_resp.into_parts();
-    let body = Body::new(body.map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    }));
+    let body = Body::new(body.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
 
     let mut response = Response::builder().status(parts.status);
     for (name, value) in parts.headers.iter() {

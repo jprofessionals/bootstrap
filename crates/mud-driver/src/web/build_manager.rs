@@ -23,7 +23,10 @@ impl BuildManager {
             }
         }
         let _ = std::fs::create_dir_all(&cache_path);
-        Self { build_log, cache_path }
+        Self {
+            build_log,
+            cache_path,
+        }
     }
 
     /// Returns true if the area has a SPA setup (web/src/package.json exists).
@@ -51,9 +54,16 @@ impl BuildManager {
         let build_dir = self.build_dir(&area_key);
         let build_log = Arc::clone(&self.build_log);
         tokio::spawn(async move {
-            if let Err(e) = run_spa_build(&area_key, &area_path, &build_dir, &base_url, &build_log).await {
+            if let Err(e) =
+                run_spa_build(&area_key, &area_path, &build_dir, &base_url, &build_log).await
+            {
                 error!(area_key = %area_key, error = %e, "SPA build failed");
-                build_log.append(&area_key, LogLevel::Error, "build", &format!("Build failed: {e}"));
+                build_log.append(
+                    &area_key,
+                    LogLevel::Error,
+                    "build",
+                    &format!("Build failed: {e}"),
+                );
             }
         });
     }
@@ -81,7 +91,12 @@ async fn run_spa_build(
     copy_dir_recursive(&src_dir, build_dir)?;
 
     info!(area_key = %area_key, "Copied web/src to build dir");
-    build_log.append(area_key, LogLevel::Info, "build", "Copied web/src to build directory");
+    build_log.append(
+        area_key,
+        LogLevel::Info,
+        "build",
+        "Copied web/src to build directory",
+    );
 
     // npm install
     let output = Command::new("npm")
@@ -94,10 +109,20 @@ async fn run_spa_build(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        build_log.append(area_key, LogLevel::Error, "npm-install", &format!("npm install failed: {stderr}"));
+        build_log.append(
+            area_key,
+            LogLevel::Error,
+            "npm-install",
+            &format!("npm install failed: {stderr}"),
+        );
         anyhow::bail!("npm install failed: {stderr}");
     }
-    build_log.append(area_key, LogLevel::Info, "npm-install", "npm install succeeded");
+    build_log.append(
+        area_key,
+        LogLevel::Info,
+        "npm-install",
+        "npm install succeeded",
+    );
 
     // npx vite build
     let output = Command::new("npx")
@@ -111,14 +136,29 @@ async fn run_spa_build(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        build_log.append(area_key, LogLevel::Error, "vite-build", &format!("vite build failed: {stderr}"));
+        build_log.append(
+            area_key,
+            LogLevel::Error,
+            "vite-build",
+            &format!("vite build failed: {stderr}"),
+        );
         anyhow::bail!("vite build failed: {stderr}");
     }
-    build_log.append(area_key, LogLevel::Info, "vite-build", "vite build succeeded");
+    build_log.append(
+        area_key,
+        LogLevel::Info,
+        "vite-build",
+        "vite build succeeded",
+    );
 
     // Inject MUD global into index.html
     inject_mud_global(build_dir, base_url)?;
-    build_log.append(area_key, LogLevel::Info, "build", "Build completed successfully");
+    build_log.append(
+        area_key,
+        LogLevel::Info,
+        "build",
+        "Build completed successfully",
+    );
 
     info!(area_key = %area_key, "SPA build completed");
     Ok(())
@@ -131,9 +171,7 @@ fn inject_mud_global(build_dir: &Path, base_url: &str) -> anyhow::Result<()> {
     }
 
     let html = std::fs::read_to_string(&index_path)?;
-    let script = format!(
-        "<script>window.__MUD__={{baseUrl:\"{base_url}\"}}</script>"
-    );
+    let script = format!("<script>window.__MUD__={{baseUrl:\"{base_url}\"}}</script>");
     let patched = html.replacen("<head>", &format!("<head>{script}"), 1);
     std::fs::write(&index_path, patched)?;
     Ok(())

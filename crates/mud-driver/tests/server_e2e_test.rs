@@ -256,10 +256,7 @@ async fn full_session_lifecycle_through_server() {
     );
 
     // Step 4: session_end sends SessionEnd and removes the session
-    server
-        .session_end(session_id)
-        .await
-        .expect("session_end");
+    server.session_end(session_id).await.expect("session_end");
 
     let received = timeout(TEST_TIMEOUT, read_driver_message(&mut adapter_read))
         .await
@@ -361,10 +358,7 @@ async fn session_end_removes_output_channel() {
 
     // Create and then end a session
     let (session_id, _rx) = server.create_session();
-    server
-        .session_end(session_id)
-        .await
-        .expect("session_end");
+    server.session_end(session_id).await.expect("session_end");
 
     // Now send output for the ended session — should be silently ignored
     let output = AdapterMessage::SessionOutput {
@@ -392,8 +386,7 @@ async fn session_end_removes_output_channel() {
 
 #[tokio::test]
 async fn multiple_sessions_with_interleaved_messages() {
-    let (mut server, mut adapter_read, mut adapter_write, _dir) =
-        setup_server_with_adapter().await;
+    let (mut server, mut adapter_read, mut adapter_write, _dir) = setup_server_with_adapter().await;
 
     // Create 3 sessions
     let (id1, mut rx1) = server.create_session();
@@ -615,10 +608,7 @@ fn discover_areas_finds_areas_with_meta_yml() {
     std::fs::create_dir_all(&area).unwrap();
     std::fs::write(area.join(".meta.yml"), "owner: vikings\n").unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     assert_eq!(areas.len(), 1, "should discover exactly one area");
     assert_eq!(areas[0].0.namespace, "vikings");
@@ -643,10 +633,7 @@ fn discover_areas_skips_directories_without_meta_yml() {
     let bad = world_path.join("vikings").join("empty_area");
     std::fs::create_dir_all(&bad).unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     assert_eq!(areas.len(), 1);
     assert_eq!(areas[0].0.name, "village");
@@ -667,10 +654,7 @@ fn discover_areas_skips_dev_directories() {
     std::fs::create_dir_all(&dev).unwrap();
     std::fs::write(dev.join(".meta.yml"), "owner: vikings\n").unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     assert_eq!(areas.len(), 1, "should skip @dev directory");
     assert_eq!(areas[0].0.name, "village");
@@ -693,10 +677,7 @@ fn discover_areas_skips_files_not_directories() {
     std::fs::create_dir_all(&area).unwrap();
     std::fs::write(area.join(".meta.yml"), "owner: vikings\n").unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     assert_eq!(areas.len(), 1);
     assert_eq!(areas[0].0.name, "village");
@@ -726,13 +707,13 @@ fn discover_areas_multiple_namespaces() {
     let no_meta = world_path.join("elves").join("cave");
     std::fs::create_dir_all(&no_meta).unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     // Should find exactly 3 areas (not the @dev, not the cave).
-    assert_eq!(areas.len(), 3, "expected 3 areas, got {:?}",
+    assert_eq!(
+        areas.len(),
+        3,
+        "expected 3 areas, got {:?}",
         areas.iter().map(|a| a.0.to_string()).collect::<Vec<_>>()
     );
 
@@ -754,12 +735,12 @@ fn discover_areas_empty_world_returns_empty() {
     let world_path = dir.path().join("world");
     std::fs::create_dir_all(&world_path).unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
-    assert!(areas.is_empty(), "empty world directory should yield no areas");
+    assert!(
+        areas.is_empty(),
+        "empty world directory should yield no areas"
+    );
 }
 
 #[test]
@@ -767,12 +748,12 @@ fn discover_areas_nonexistent_world_returns_empty() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let world_path = dir.path().join("nonexistent_world");
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
-    assert!(areas.is_empty(), "nonexistent world path should yield no areas");
+    assert!(
+        areas.is_empty(),
+        "nonexistent world path should yield no areas"
+    );
 }
 
 #[test]
@@ -790,10 +771,7 @@ fn discover_areas_with_system_namespace() {
     std::fs::create_dir_all(&game_area).unwrap();
     std::fs::write(game_area.join(".meta.yml"), "owner: vikings\n").unwrap();
 
-    let areas = mud_driver::server::discover_areas(
-        &world_path.to_string_lossy(),
-    )
-    .unwrap();
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
 
     assert_eq!(areas.len(), 2);
     let ids: Vec<String> = areas.iter().map(|a| a.0.to_string()).collect();

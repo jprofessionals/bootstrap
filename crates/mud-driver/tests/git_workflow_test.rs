@@ -148,16 +148,19 @@ fn branch_protection_lifecycle() {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::metadata(&hook_path).unwrap().permissions();
-        assert!(
-            perms.mode() & 0o111 != 0,
-            "hook must be executable"
-        );
+        assert!(perms.mode() & 0o111 != 0, "hook must be executable");
     }
 
     // Verify hook content rejects pushes to main
     let content = std::fs::read_to_string(&hook_path).unwrap();
-    assert!(content.contains("refs/heads/main"), "hook must check for main branch");
-    assert!(content.contains("exit 1"), "hook must exit non-zero on main push");
+    assert!(
+        content.contains("refs/heads/main"),
+        "hook must check for main branch"
+    );
+    assert!(
+        content.contains("exit 1"),
+        "hook must exit non-zero on main push"
+    );
 
     // Remove branch protection
     branch_protection::remove_branch_protection(&repo_path).unwrap();
@@ -393,9 +396,15 @@ fn diff_shows_changes_before_commit() {
     std::fs::write(&entrance_path, format!("{}\n# modified\n", original)).unwrap();
 
     let diff = ws.diff("vikings", "forge", "develop").unwrap();
-    assert!(diff.len() >= 2, "should see at least the new file and the modification");
+    assert!(
+        diff.len() >= 2,
+        "should see at least the new file and the modification"
+    );
     let entrance_entry = diff.iter().find(|e| e.path == "rooms/entrance.rb");
-    assert!(entrance_entry.is_some(), "entrance.rb modification must appear in diff");
+    assert!(
+        entrance_entry.is_some(),
+        "entrance.rb modification must appear in diff"
+    );
     assert_eq!(
         entrance_entry.unwrap().status,
         "modified",
@@ -403,8 +412,14 @@ fn diff_shows_changes_before_commit() {
     );
 
     // After committing, diff should be clean again
-    ws.commit("vikings", "forge", "ulf", "Add sword and modify entrance", "develop")
-        .unwrap();
+    ws.commit(
+        "vikings",
+        "forge",
+        "ulf",
+        "Add sword and modify entrance",
+        "develop",
+    )
+    .unwrap();
     let after_commit = ws.diff("vikings", "forge", "develop").unwrap();
     assert!(after_commit.is_empty(), "diff should be clean after commit");
 }

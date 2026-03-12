@@ -34,7 +34,10 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
         .status();
 
     // Build static musl binaries (no-op if already up to date)
-    log(t0, "Building mud-driver + mud-adapter-lpc (musl release)...");
+    log(
+        t0,
+        "Building mud-driver + mud-adapter-lpc (musl release)...",
+    );
     let status = std::process::Command::new("cargo")
         .args([
             "build",
@@ -49,7 +52,10 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
         .current_dir(project_root)
         .status()
         .expect("failed to run cargo build");
-    assert!(status.success(), "cargo build --release --target musl failed");
+    assert!(
+        status.success(),
+        "cargo build --release --target musl failed"
+    );
     log(t0, "Musl binaries built");
 
     // Build JVM adapter: launcher JAR and publish MOP/stdlib to local Maven
@@ -151,7 +157,11 @@ impl TestServer {
         Self::start_with_adapters(true, true, true).await
     }
 
-    pub async fn start_with_adapters(ruby_enabled: bool, jvm_enabled: bool, lpc_enabled: bool) -> Self {
+    pub async fn start_with_adapters(
+        ruby_enabled: bool,
+        jvm_enabled: bool,
+        lpc_enabled: bool,
+    ) -> Self {
         let t0 = Instant::now();
 
         // Ensure image is built
@@ -274,14 +284,20 @@ adapters:
         // Wait for both driver and portal to be ready
         log(t0, "Waiting for driver + portal ready...");
         let timeout = Duration::from_secs(120);
-        if tokio::time::timeout(timeout, driver_ready_rx).await.is_err() {
+        if tokio::time::timeout(timeout, driver_ready_rx)
+            .await
+            .is_err()
+        {
             panic!(
                 "Timed out after {timeout:?} waiting for 'Server ready' in mud-driver stdout. \
                  Check log lines above for errors."
             );
         }
         log(t0, "Driver ready");
-        if tokio::time::timeout(timeout, portal_ready_rx).await.is_err() {
+        if tokio::time::timeout(timeout, portal_ready_rx)
+            .await
+            .is_err()
+        {
             panic!(
                 "Timed out after {timeout:?} waiting for 'Portal web server started' in stderr. \
                  Check log lines above for errors."
@@ -304,7 +320,10 @@ adapters:
             .unwrap();
 
         // Poll until the HTTP server responds (portal ready)
-        log(t0, &format!("Polling http://127.0.0.1:{http_port}/account/login ..."));
+        log(
+            t0,
+            &format!("Polling http://127.0.0.1:{http_port}/account/login ..."),
+        );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             if tokio::time::Instant::now() > deadline {

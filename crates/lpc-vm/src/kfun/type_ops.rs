@@ -1,8 +1,8 @@
 //! Type inspection kfuns: typeof, instanceof.
 
+use super::{require_object, require_string, KfunContext, LpcError};
+use super::{T_ARRAY, T_FLOAT, T_INT, T_LWOBJECT, T_MAPPING, T_NIL, T_OBJECT, T_STRING};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_object, require_string};
-use super::{T_NIL, T_INT, T_FLOAT, T_STRING, T_OBJECT, T_ARRAY, T_MAPPING, T_LWOBJECT};
 
 /// typeof(mixed value) -> int
 ///

@@ -24,7 +24,9 @@ fn set_and_get_core_property() {
     let ok = store.set_property(id, "name", Value::String("Goblin".into()));
     assert!(ok, "set_property should return true for existing object");
 
-    let val = store.get_property(id, "name").expect("property should exist");
+    let val = store
+        .get_property(id, "name")
+        .expect("property should exist");
     assert_eq!(*val, Value::String("Goblin".into()));
 }
 
@@ -115,9 +117,15 @@ fn remove_object() {
     assert!(store.get(id).is_some());
 
     let removed = store.remove_object(id);
-    assert!(removed, "remove_object should return true for existing object");
+    assert!(
+        removed,
+        "remove_object should return true for existing object"
+    );
 
-    assert!(store.get(id).is_none(), "object should not exist after removal");
+    assert!(
+        store.get(id).is_none(),
+        "object should not exist after removal"
+    );
 }
 
 #[test]

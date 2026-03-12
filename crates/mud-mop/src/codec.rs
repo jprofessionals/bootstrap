@@ -284,10 +284,7 @@ mod tests {
         let err = CodecError::Closed;
         assert_eq!(format!("{}", err), "Connection closed");
 
-        let err = CodecError::TooLarge {
-            size: 100,
-            max: 50,
-        };
+        let err = CodecError::TooLarge { size: 100, max: 50 };
         let display = format!("{}", err);
         assert!(display.contains("100"));
         assert!(display.contains("50"));
@@ -328,9 +325,10 @@ mod tests {
         let msg = AdapterMessage::DriverRequest {
             request_id: 1,
             action: "get_area_info".into(),
-            params: Value::Map(std::collections::HashMap::from([
-                ("ns".into(), Value::String("game".into())),
-            ])),
+            params: Value::Map(std::collections::HashMap::from([(
+                "ns".into(),
+                Value::String("game".into()),
+            )])),
         };
 
         let mut buf = Vec::new();

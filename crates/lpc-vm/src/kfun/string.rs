@@ -1,7 +1,7 @@
 //! String operation kfuns: strlen, explode, implode, lower_case, upper_case, sscanf.
 
+use super::{require_array, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_string, require_array};
 
 /// strlen(string s) -> int
 ///
@@ -21,9 +21,7 @@ pub fn kf_explode(ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, 
 
     let parts: Vec<LpcValue> = if sep.is_empty() {
         // Split into individual characters
-        s.chars()
-            .map(|c| LpcValue::String(c.to_string()))
-            .collect()
+        s.chars().map(|c| LpcValue::String(c.to_string())).collect()
     } else {
         // Split by separator, filter out empty strings at edges (DGD behavior)
         s.split(sep)
@@ -119,8 +117,7 @@ pub fn kf_sscanf(ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, L
                 let remaining = &input[pos..];
                 let mut end = 0;
                 if end < remaining.len()
-                    && (remaining.as_bytes()[end] == b'-'
-                        || remaining.as_bytes()[end] == b'+')
+                    && (remaining.as_bytes()[end] == b'-' || remaining.as_bytes()[end] == b'+')
                 {
                     end += 1;
                 }
@@ -141,8 +138,7 @@ pub fn kf_sscanf(ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, L
                 let mut end = 0;
                 // Optional sign
                 if end < remaining.len()
-                    && (remaining.as_bytes()[end] == b'-'
-                        || remaining.as_bytes()[end] == b'+')
+                    && (remaining.as_bytes()[end] == b'-' || remaining.as_bytes()[end] == b'+')
                 {
                     end += 1;
                 }
@@ -153,8 +149,7 @@ pub fn kf_sscanf(ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, L
                 // Decimal point
                 if end < remaining.len() && remaining.as_bytes()[end] == b'.' {
                     end += 1;
-                    while end < remaining.len() && remaining.as_bytes()[end].is_ascii_digit()
-                    {
+                    while end < remaining.len() && remaining.as_bytes()[end].is_ascii_digit() {
                         end += 1;
                     }
                 }

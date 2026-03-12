@@ -105,6 +105,10 @@ module MudAdapter
       end_session(session_id)
     end
 
+    def total_players_online
+      @sessions.size
+    end
+
     private
 
     # Find a starting room for a new player.

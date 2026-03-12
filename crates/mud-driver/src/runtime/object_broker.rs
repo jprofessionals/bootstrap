@@ -75,8 +75,7 @@ impl ObjectBroker {
         if object_ids.is_empty() {
             return;
         }
-        self.cache
-            .retain(|&(oid, _), _| !object_ids.contains(&oid));
+        self.cache.retain(|&(oid, _), _| !object_ids.contains(&oid));
     }
 
     /// Invalidate all entries whose key starts with the given program path.

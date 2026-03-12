@@ -46,8 +46,5 @@ fn test_build_dir_path() {
         manager.build_dir("world/town"),
         cache_path.join("world-town")
     );
-    assert_eq!(
-        manager.build_dir("myarea"),
-        cache_path.join("myarea")
-    );
+    assert_eq!(manager.build_dir("myarea"), cache_path.join("myarea"));
 }

@@ -3,8 +3,8 @@
 //! DGD provides a built-in ed-style line editor. These kfuns interface with it.
 //! Our driver does not implement this feature, so these are permanent stubs.
 
-use crate::bytecode::LpcValue;
 use super::{KfunContext, LpcError};
+use crate::bytecode::LpcValue;
 
 /// editor(string command) -> string
 ///

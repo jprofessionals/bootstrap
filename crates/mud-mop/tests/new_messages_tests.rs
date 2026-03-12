@@ -115,9 +115,7 @@ fn invalidate_cache_with_object_ids() {
 
 #[test]
 fn invalidate_cache_with_empty_ids() {
-    let msg = AdapterMessage::InvalidateCache {
-        object_ids: vec![],
-    };
+    let msg = AdapterMessage::InvalidateCache { object_ids: vec![] };
     let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
     let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
     assert_eq!(msg, decoded);
@@ -218,13 +216,8 @@ fn cache_policy_serialization_round_trip() {
 
     for policy in policies {
         let bytes = rmp_serde::to_vec_named(&policy).expect("serialize CachePolicy");
-        let decoded: CachePolicy =
-            rmp_serde::from_slice(&bytes).expect("deserialize CachePolicy");
-        assert_eq!(
-            policy, decoded,
-            "round-trip failed for {:?}",
-            policy
-        );
+        let decoded: CachePolicy = rmp_serde::from_slice(&bytes).expect("deserialize CachePolicy");
+        assert_eq!(policy, decoded, "round-trip failed for {:?}", policy);
     }
 }
 

@@ -172,8 +172,7 @@ impl Preprocessor {
                             });
                         }
                         let len = cond_stack.len();
-                        let parent_active = len < 2
-                            || cond_stack[len - 2] == CondState::Active;
+                        let parent_active = len < 2 || cond_stack[len - 2] == CondState::Active;
                         let current = cond_stack[len - 1];
                         match current {
                             CondState::Active => {
@@ -198,8 +197,7 @@ impl Preprocessor {
                             });
                         }
                         let len = cond_stack.len();
-                        let parent_active = len < 2
-                            || cond_stack[len - 2] == CondState::Active;
+                        let parent_active = len < 2 || cond_stack[len - 2] == CondState::Active;
                         let current = cond_stack[len - 1];
                         match current {
                             CondState::Active => {
@@ -293,7 +291,12 @@ impl Preprocessor {
         Ok(output)
     }
 
-    fn handle_define(&mut self, rest: &str, filename: &str, line: u32) -> Result<(), PreprocessError> {
+    fn handle_define(
+        &mut self,
+        rest: &str,
+        filename: &str,
+        line: u32,
+    ) -> Result<(), PreprocessError> {
         let rest = rest.trim();
         if rest.is_empty() {
             return Err(PreprocessError::InvalidMacro {
@@ -331,10 +334,8 @@ impl Preprocessor {
                         .collect()
                 };
                 let body = after_name[close + 1..].trim().to_string();
-                self.defines.insert(
-                    name.to_string(),
-                    MacroDef::Parameterized { params, body },
-                );
+                self.defines
+                    .insert(name.to_string(), MacroDef::Parameterized { params, body });
             } else {
                 return Err(PreprocessError::InvalidMacro {
                     filename: filename.to_string(),
@@ -360,19 +361,23 @@ impl Preprocessor {
         let rest = rest.trim();
         let path = if rest.starts_with('"') {
             // #include "file"
-            let end = rest[1..].find('"').ok_or_else(|| PreprocessError::IncludeNotFound {
-                path: rest.to_string(),
-                filename: filename.to_string(),
-                line,
-            })?;
+            let end = rest[1..]
+                .find('"')
+                .ok_or_else(|| PreprocessError::IncludeNotFound {
+                    path: rest.to_string(),
+                    filename: filename.to_string(),
+                    line,
+                })?;
             &rest[1..1 + end]
         } else if rest.starts_with('<') {
             // #include <file>
-            let end = rest[1..].find('>').ok_or_else(|| PreprocessError::IncludeNotFound {
-                path: rest.to_string(),
-                filename: filename.to_string(),
-                line,
-            })?;
+            let end = rest[1..]
+                .find('>')
+                .ok_or_else(|| PreprocessError::IncludeNotFound {
+                    path: rest.to_string(),
+                    filename: filename.to_string(),
+                    line,
+                })?;
             &rest[1..1 + end]
         } else {
             return Err(PreprocessError::IncludeNotFound {
@@ -382,13 +387,14 @@ impl Preprocessor {
             });
         };
 
-        let resolver = self.include_resolver.as_ref().ok_or_else(|| {
-            PreprocessError::IncludeNotFound {
-                path: path.to_string(),
-                filename: filename.to_string(),
-                line,
-            }
-        })?;
+        let resolver =
+            self.include_resolver
+                .as_ref()
+                .ok_or_else(|| PreprocessError::IncludeNotFound {
+                    path: path.to_string(),
+                    filename: filename.to_string(),
+                    line,
+                })?;
 
         let source = resolver(path).ok_or_else(|| PreprocessError::IncludeNotFound {
             path: path.to_string(),
@@ -490,8 +496,7 @@ impl Preprocessor {
                     }
                     // Parse identifier
                     let ident_start = j;
-                    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_')
-                    {
+                    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
                         j += 1;
                     }
                     let name: String = chars[ident_start..j].iter().collect();
@@ -930,7 +935,9 @@ impl<'a> CondExprEvaluator<'a> {
 
     fn parse_primary(&mut self) -> Result<i64, PreprocessError> {
         self.skip_ws();
-        let ch = self.peek().ok_or_else(|| self.error("unexpected end of expression"))?;
+        let ch = self
+            .peek()
+            .ok_or_else(|| self.error("unexpected end of expression"))?;
 
         // Parenthesized expression
         if ch == '(' {
@@ -1012,6 +1019,10 @@ impl<'a> CondExprEvaluator<'a> {
             }
             self.advance();
         }
-        Ok(if self.defines.contains_key(&name) { 1 } else { 0 })
+        Ok(if self.defines.contains_key(&name) {
+            1
+        } else {
+            0
+        })
     }
 }

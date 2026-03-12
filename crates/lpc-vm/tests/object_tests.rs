@@ -208,9 +208,7 @@ fn global_get_set() {
         path: "/std/room".to_string(),
         is_lightweight: false,
     };
-    table
-        .set_global(&master_ref, 0, LpcValue::Int(42))
-        .unwrap();
+    table.set_global(&master_ref, 0, LpcValue::Int(42)).unwrap();
     let val = table.get_global(&master_ref, 0).unwrap();
     assert_eq!(val, &LpcValue::Int(42));
 }
@@ -233,7 +231,9 @@ fn clone_global_get_set() {
     let mut table = ObjectTable::new();
     table.register_master(make_program("/std/room", &[], 2));
     let clone = table.clone_object("/std/room").unwrap();
-    table.set_global(&clone, 0, LpcValue::String("hello".into())).unwrap();
+    table
+        .set_global(&clone, 0, LpcValue::String("hello".into()))
+        .unwrap();
     let val = table.get_global(&clone, 0).unwrap();
     assert_eq!(val, &LpcValue::String("hello".to_string()));
 }

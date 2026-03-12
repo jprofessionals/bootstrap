@@ -43,11 +43,7 @@ impl VersionTree {
         }
 
         // Insert forward edges.
-        let version = self
-            .programs
-            .get(path)
-            .map(|p| p.version)
-            .unwrap_or(1);
+        let version = self.programs.get(path).map(|p| p.version).unwrap_or(1);
 
         // Insert reverse edges.
         for dep in &deps {

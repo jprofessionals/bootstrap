@@ -63,7 +63,11 @@ async fn test_list_files() {
 
     // Should contain main.lua and rooms/hall.lua
     let paths: Vec<&str> = files.iter().map(|f| f.as_str().unwrap()).collect();
-    assert!(paths.contains(&"main.lua"), "expected main.lua in {:?}", paths);
+    assert!(
+        paths.contains(&"main.lua"),
+        "expected main.lua in {:?}",
+        paths
+    );
     assert!(
         paths.contains(&"rooms/hall.lua"),
         "expected rooms/hall.lua in {:?}",
@@ -114,8 +118,7 @@ async fn test_write_file() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // Verify the file was actually written
-    let content =
-        std::fs::read_to_string(world_path.join("ns/testarea@dev/main.lua")).unwrap();
+    let content = std::fs::read_to_string(world_path.join("ns/testarea@dev/main.lua")).unwrap();
     assert_eq!(content, "-- updated\n");
 }
 
@@ -136,8 +139,7 @@ async fn test_create_file() {
 
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let content =
-        std::fs::read_to_string(world_path.join("ns/testarea@dev/newfile.lua")).unwrap();
+    let content = std::fs::read_to_string(world_path.join("ns/testarea@dev/newfile.lua")).unwrap();
     assert_eq!(content, "-- brand new\n");
 }
 

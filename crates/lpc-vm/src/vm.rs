@@ -49,9 +49,7 @@ impl From<ObjectError> for VmError {
     fn from(e: ObjectError) -> Self {
         match e {
             ObjectError::NotFound(p) => VmError::RuntimeError(format!("object not found: {p}")),
-            ObjectError::NotMaster(p) => {
-                VmError::RuntimeError(format!("not a master object: {p}"))
-            }
+            ObjectError::NotMaster(p) => VmError::RuntimeError(format!("not a master object: {p}")),
             ObjectError::AlreadyDestroyed(_) => VmError::ObjectDestroyed,
             ObjectError::InvalidClone(id) => {
                 VmError::RuntimeError(format!("invalid clone id: {id}"))
@@ -172,11 +170,7 @@ impl Vm {
     }
 
     /// Compile LPC source code, load it, and return the master object reference.
-    pub fn compile_and_load(
-        &mut self,
-        path: &str,
-        source: &str,
-    ) -> Result<ObjectRef, VmError> {
+    pub fn compile_and_load(&mut self, path: &str, source: &str) -> Result<ObjectRef, VmError> {
         use crate::lexer::scanner::Scanner;
 
         let mut scanner = Scanner::new(source);
@@ -204,10 +198,10 @@ impl Vm {
         args: &[LpcValue],
     ) -> Result<LpcValue, VmError> {
         // Resolve function through the inheritance chain.
-        let (program_path, func_idx) = self
-            .object_table
-            .resolve_function(&object.path, function)
-            .ok_or_else(|| VmError::UndefinedFunction(function.to_string()))?;
+        let (program_path, func_idx) =
+            self.object_table
+                .resolve_function(&object.path, function)
+                .ok_or_else(|| VmError::UndefinedFunction(function.to_string()))?;
 
         let program = self
             .object_table
@@ -648,26 +642,20 @@ impl Vm {
                     compound_assign_global(state, &mut self.object_table, idx, bitwise_or)?;
                 }
                 OpCode::XorAssignGlobal(idx) => {
-                    compound_assign_global(
-                        state,
-                        &mut self.object_table,
-                        idx,
-                        |a, b| match (a, b) {
+                    compound_assign_global(state, &mut self.object_table, idx, |a, b| {
+                        match (a, b) {
                             (LpcValue::Int(x), LpcValue::Int(y)) => Ok(LpcValue::Int(x ^ y)),
                             (a, b) => Err(VmError::TypeError(format!(
                                 "^= requires int, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             ))),
-                        },
-                    )?;
+                        }
+                    })?;
                 }
                 OpCode::ShlAssignGlobal(idx) => {
-                    compound_assign_global(
-                        state,
-                        &mut self.object_table,
-                        idx,
-                        |a, b| match (a, b) {
+                    compound_assign_global(state, &mut self.object_table, idx, |a, b| {
+                        match (a, b) {
                             (LpcValue::Int(x), LpcValue::Int(y)) => {
                                 Ok(LpcValue::Int(x.wrapping_shl(y as u32)))
                             }
@@ -676,15 +664,12 @@ impl Vm {
                                 a.type_name(),
                                 b.type_name()
                             ))),
-                        },
-                    )?;
+                        }
+                    })?;
                 }
                 OpCode::ShrAssignGlobal(idx) => {
-                    compound_assign_global(
-                        state,
-                        &mut self.object_table,
-                        idx,
-                        |a, b| match (a, b) {
+                    compound_assign_global(state, &mut self.object_table, idx, |a, b| {
+                        match (a, b) {
                             (LpcValue::Int(x), LpcValue::Int(y)) => {
                                 Ok(LpcValue::Int(x.wrapping_shr(y as u32)))
                             }
@@ -693,8 +678,8 @@ impl Vm {
                                 a.type_name(),
                                 b.type_name()
                             ))),
-                        },
-                    )?;
+                        }
+                    })?;
                 }
 
                 // -----------------------------------------------------------
@@ -738,10 +723,10 @@ impl Vm {
                     let caller_obj = caller_frame.this_object.clone();
 
                     let target_program = self.get_program_for_path(&prog_path)?;
-                    let target_func =
-                        target_program.functions.get(func_idx as usize).ok_or_else(|| {
-                            VmError::UndefinedFunction(format!("func#{func_idx}"))
-                        })?;
+                    let target_func = target_program
+                        .functions
+                        .get(func_idx as usize)
+                        .ok_or_else(|| VmError::UndefinedFunction(format!("func#{func_idx}")))?;
 
                     let mut locals = Vec::with_capacity(target_func.local_count as usize);
                     for i in 0..target_func.local_count as usize {
@@ -788,12 +773,11 @@ impl Vm {
 
                     let target_ref = match &target_val {
                         LpcValue::Object(o) => o.clone(),
-                        LpcValue::String(path) => self
-                            .object_table
-                            .find_object(path)
-                            .ok_or_else(|| {
+                        LpcValue::String(path) => {
+                            self.object_table.find_object(path).ok_or_else(|| {
                                 VmError::RuntimeError(format!("object not found: {path}"))
-                            })?,
+                            })?
+                        }
                         _ => {
                             return Err(VmError::TypeError(
                                 "call_other: target must be object or string".into(),
@@ -886,10 +870,7 @@ impl Vm {
                     state.call_stack.push(new_frame);
                 }
 
-                OpCode::CallKfun {
-                    kfun_id,
-                    arg_count,
-                } => {
+                OpCode::CallKfun { kfun_id, arg_count } => {
                     let arg_count = arg_count as usize;
                     let mut args = Vec::with_capacity(arg_count);
                     for _ in 0..arg_count {
@@ -972,9 +953,7 @@ impl Vm {
                             self.object_table.destruct(&oref)?;
                         }
                         _ => {
-                            return Err(VmError::TypeError(
-                                "destruct requires object".into(),
-                            ));
+                            return Err(VmError::TypeError("destruct requires object".into()));
                         }
                     }
                 }
@@ -1481,16 +1460,9 @@ fn range_index(
 }
 
 fn normalize_index(index: i64, len: usize) -> Result<usize, VmError> {
-    let resolved = if index < 0 {
-        len as i64 + index
-    } else {
-        index
-    };
+    let resolved = if index < 0 { len as i64 + index } else { index };
     if resolved < 0 || resolved as usize >= len {
-        Err(VmError::IndexOutOfBounds {
-            index,
-            size: len,
-        })
+        Err(VmError::IndexOutOfBounds { index, size: len })
     } else {
         Ok(resolved as usize)
     }

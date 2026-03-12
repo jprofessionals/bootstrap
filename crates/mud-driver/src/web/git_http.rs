@@ -37,10 +37,7 @@ pub fn git_http_routes() -> Router<AppState> {
     Router::new()
         .route("/{ns}/{repo}/info/refs", get(info_refs_handler))
         .route("/{ns}/{repo}/git-upload-pack", post(upload_pack_handler))
-        .route(
-            "/{ns}/{repo}/git-receive-pack",
-            post(receive_pack_handler),
-        )
+        .route("/{ns}/{repo}/git-receive-pack", post(receive_pack_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -74,11 +71,8 @@ struct BasicCredentials {
 fn extract_basic_auth(headers: &HeaderMap) -> Option<BasicCredentials> {
     let auth_value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let encoded = auth_value.strip_prefix("Basic ")?;
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        encoded,
-    )
-    .ok()?;
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
     let decoded_str = String::from_utf8(decoded).ok()?;
     let (username, password) = decoded_str.split_once(':')?;
     Some(BasicCredentials {

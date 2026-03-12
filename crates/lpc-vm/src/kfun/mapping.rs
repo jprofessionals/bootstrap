@@ -1,7 +1,7 @@
 //! Mapping operation kfuns: map_indices, map_values, map_sizeof, mkmapping.
 
+use super::{require_array, require_mapping, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_mapping, require_array};
 
 /// map_indices(mapping m) -> mixed*
 ///

@@ -22,6 +22,8 @@ use tokio::sync::{mpsc, oneshot};
 pub struct MopRequest {
     /// The driver message to send to the adapter.
     pub message: DriverMessage,
+    /// Optional explicit adapter language target for area-specific RPCs.
+    pub target_language: Option<String>,
     /// Channel on which the server will deliver the adapter's response.
     pub response_tx: oneshot::Sender<Result<Value, String>>,
 }
@@ -45,10 +47,21 @@ impl MopRpcClient {
     /// `request_id: 0` — the server event loop will replace it with a
     /// unique value before forwarding to the adapter.
     pub async fn call(&self, message: DriverMessage) -> Result<Value, String> {
+        self.call_for_language(message, None).await
+    }
+
+    /// Send a [`DriverMessage`] to a specific adapter language and wait for the
+    /// response.
+    pub async fn call_for_language(
+        &self,
+        message: DriverMessage,
+        target_language: Option<String>,
+    ) -> Result<Value, String> {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
             .send(MopRequest {
                 message,
+                target_language,
                 response_tx,
             })
             .await
@@ -71,9 +84,8 @@ mod tests {
         // Spawn a fake "server" that always responds with success.
         tokio::spawn(async move {
             if let Some(req) = rx.recv().await {
-                let _ = req
-                    .response_tx
-                    .send(Ok(Value::String("allowed".into())));
+                assert_eq!(req.target_language, None);
+                let _ = req.response_tx.send(Ok(Value::String("allowed".into())));
             }
         });
 
@@ -97,6 +109,7 @@ mod tests {
 
         tokio::spawn(async move {
             if let Some(req) = rx.recv().await {
+                assert_eq!(req.target_language, None);
                 let _ = req.response_tx.send(Err("denied".into()));
             }
         });
@@ -132,5 +145,30 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("closed"));
+    }
+
+    #[tokio::test]
+    async fn call_for_language_sets_target_language() {
+        let (tx, mut rx) = mpsc::channel::<MopRequest>(4);
+        let client = MopRpcClient::new(tx);
+
+        tokio::spawn(async move {
+            if let Some(req) = rx.recv().await {
+                assert_eq!(req.target_language.as_deref(), Some("lpc"));
+                let _ = req.response_tx.send(Ok(Value::Bool(true)));
+            }
+        });
+
+        let result = client
+            .call_for_language(
+                DriverMessage::GetWebData {
+                    request_id: 0,
+                    area_key: "ns/area".into(),
+                },
+                Some("lpc".into()),
+            )
+            .await;
+
+        assert_eq!(result, Ok(Value::Bool(true)));
     }
 }

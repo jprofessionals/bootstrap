@@ -101,10 +101,7 @@ async fn build_harness() -> TestHarness {
             last_used_at TIMESTAMPTZ
         )",
     ] {
-        sqlx::query(sql)
-            .execute(&pool)
-            .await
-            .expect("create table");
+        sqlx::query(sql).execute(&pool).await.expect("create table");
     }
 
     let player_store = Arc::new(PlayerStore::new(pool));

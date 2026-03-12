@@ -5,8 +5,8 @@
 //! These kfuns route through driver services via MOP. All are stubs until
 //! MOP integration is complete.
 
-use crate::bytecode::LpcValue;
 use super::{KfunContext, LpcError};
+use crate::bytecode::LpcValue;
 
 /// send_message(mixed msg) -> int
 ///
@@ -14,10 +14,7 @@ use super::{KfunContext, LpcError};
 /// - If msg is string: send as text
 /// - If msg is int: 0 = disable echo, 1 = enable echo
 /// Returns number of bytes sent.
-pub fn kf_send_message(
-    _ctx: &mut KfunContext,
-    _args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_send_message(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     Err(LpcError::RuntimeError(
         "send_message: driver services not yet connected".into(),
     ))
@@ -47,10 +44,7 @@ pub fn kf_query_ip_number(
 /// query_ip_name(object user) -> string
 ///
 /// Returns hostname of a user's connection.
-pub fn kf_query_ip_name(
-    _ctx: &mut KfunContext,
-    _args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_query_ip_name(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     Err(LpcError::RuntimeError(
         "query_ip_name: driver services not yet connected".into(),
     ))
@@ -101,10 +95,7 @@ pub fn kf_send_close(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcVa
 /// send_datagram(string data) -> int
 ///
 /// Send a datagram message on the current connection.
-pub fn kf_send_datagram(
-    _ctx: &mut KfunContext,
-    _args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_send_datagram(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     Err(LpcError::RuntimeError(
         "send_datagram: driver services not yet connected".into(),
     ))

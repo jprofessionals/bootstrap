@@ -352,12 +352,12 @@ Annotated with `@MudArea`, `@MudRoom`, `@MudItem`, `@MudNPC`, `@MudDaemon`. Disc
 
 ### Architecture
 
-The LPC/Rust adapter (`adapters/lpc/`) runs as a single MOP process that hosts both the LPC VM (for `.c` files) and a dynamic `.so` module loader (for `.rs` files). It handles two area types:
+The LPC/Rust adapter (`adapters/lpc/`) runs as a single MOP process that hosts the LPC VM for `.c` files and declares both `lpc` and `rust` routing targets. The LPC execution path is implemented today; the Rust `.so` module runtime described below is planned architecture rather than shipped behavior.
 
-- **`language: lpc`** — LPC game objects (rooms, items, NPCs, daemons as `.c` files) with Rust `.so` web modules
-- **`language: rust`** — Pure Rust areas where everything is a `.so` module
+- **`language: lpc`** — implemented today via LPC game objects (`.c` files)
+- **`language: rust`** — reserved for the planned Rust module runtime
 
-The adapter declares both languages in its handshake (`languages: ["lpc", "rust"]`), so the driver routes both area types to it.
+The adapter declares both languages in its handshake (`languages: ["lpc", "rust"]`), so the driver can route both area types to the same process once the Rust runtime is implemented.
 
 ### Unified Program Model
 
@@ -370,7 +370,7 @@ Every piece of reloadable code is a **program** in the driver's version tree:
 | Ruby object   | `.rb` file   | Interpreted         | Single file              |
 | Kotlin object | `.kt` file   | JVM class           | Gradle module            |
 
-### Rust `.so` Module System
+### Rust `.so` Module System (Planned)
 
 Rust area code compiles to granular `.so` modules with C ABI entry points:
 
@@ -438,7 +438,7 @@ Roda subclass that areas can extend for custom web APIs. Provides `area_db` acce
 
 Areas serve web content at `/project/<ns>/<area>/`, hosted directly by the Rust driver. Configured in `mud_web.rb`:
 
-**Tera template mode** (default): The driver renders Tera templates from `web/templates/` with data provided by the adapter via the `GetWebData` MOP call (which invokes the area's `web_data` block).
+**Tera template mode** (default): The driver renders Tera templates from `web/templates/` with data provided by the adapter via the `GetWebData` MOP call.
 
 **SPA mode**: Vite-built JS app from `web/src/`. The driver's `BuildManager` handles npm install + vite build (with correct `--base` URL) and `window.__MUD__` injection. Builds are triggered by git push (SSH/HTTP) and workspace commits.
 

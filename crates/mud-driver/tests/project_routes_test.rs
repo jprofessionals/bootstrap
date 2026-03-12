@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use mud_driver::mop_rpc::{MopRequest, MopRpcClient};
 use tower::ServiceExt;
 
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use tokio::sync::RwLock;
 
 use mud_driver::web::build_log::BuildLog;
 use mud_driver::web::project::project_routes;
+use mud_mop::message::{DriverMessage, Value};
 
 /// Create a temp directory with the following structure:
 ///
@@ -37,8 +39,23 @@ fn setup_dirs(tmp: &std::path::Path) -> (PathBuf, PathBuf) {
 }
 
 fn build_app(world: PathBuf, cache: PathBuf) -> axum::Router {
+    build_app_with_mop(world, cache, None)
+}
+
+fn build_app_with_mop(
+    world: PathBuf,
+    cache: PathBuf,
+    mop_rpc: Option<MopRpcClient>,
+) -> axum::Router {
     let build_log = Arc::new(BuildLog::new(100));
-    project_routes(world, cache, build_log, None, "/nonexistent.sock".into(), Arc::new(RwLock::new(HashMap::new())))
+    project_routes(
+        world,
+        cache,
+        build_log,
+        mop_rpc,
+        "/nonexistent.sock".into(),
+        Arc::new(RwLock::new(HashMap::new())),
+    )
 }
 
 #[tokio::test]
@@ -150,20 +167,23 @@ async fn test_serve_tera_template() {
     std::fs::create_dir_all(&templates).unwrap();
     std::fs::write(
         templates.join("index.html"),
-        "<h1>Hello {{ area_name }}</h1>",
+        "<h1>Hello {{ area_name }}</h1><p>{{ room_count }}</p><p>{{ server_name }}</p>",
     )
     .unwrap();
 
     let build_log = Arc::new(BuildLog::new(100));
-    let router = project_routes(world, tmp.path().join("build-cache"), build_log, None, "/nonexistent.sock".into(), Arc::new(RwLock::new(HashMap::new())));
+    let router = project_routes(
+        world,
+        tmp.path().join("build-cache"),
+        build_log,
+        None,
+        "/nonexistent.sock".into(),
+        Arc::new(RwLock::new(HashMap::new())),
+    );
 
     let resp = router
         .clone()
-        .oneshot(
-            Request::get("/ns/templated/")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/ns/templated/").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -175,6 +195,62 @@ async fn test_serve_tera_template() {
         "expected rendered template with area_name, got: {}",
         text
     );
+    assert!(text.contains("<p>0</p>"));
+}
+
+#[tokio::test]
+async fn test_serve_tera_template_with_adapter_web_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let world = tmp.path().join("world");
+    let templates = world.join("ns/templated/web/templates");
+    std::fs::create_dir_all(&templates).unwrap();
+    std::fs::write(
+        templates.join("index.html"),
+        "<h1>{{ greeting }}</h1><p>{{ room_count }}</p>",
+    )
+    .unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<MopRequest>(4);
+    tokio::spawn(async move {
+        if let Some(req) = rx.recv().await {
+            assert_eq!(req.target_language.as_deref(), Some("ruby"));
+            assert_eq!(
+                req.message,
+                DriverMessage::GetWebData {
+                    request_id: 0,
+                    area_key: "ns/templated".into(),
+                }
+            );
+            let _ = req.response_tx.send(Ok(Value::Map(HashMap::from([(
+                "data".into(),
+                Value::Map(HashMap::from([
+                    (
+                        "greeting".into(),
+                        Value::String("Hello from adapter".into()),
+                    ),
+                    ("room_count".into(), Value::Int(7)),
+                ])),
+            )]))));
+        }
+    });
+
+    let router = build_app_with_mop(
+        world,
+        tmp.path().join("build-cache"),
+        Some(MopRpcClient::new(tx)),
+    );
+
+    let resp = router
+        .clone()
+        .oneshot(Request::get("/ns/templated/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("Hello from adapter"));
+    assert!(text.contains("<p>7</p>"));
 }
 
 #[tokio::test]

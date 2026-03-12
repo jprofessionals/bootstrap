@@ -574,8 +574,8 @@ fn collect_skill_files(root: &Path, repo_url: &str) -> Result<Vec<Skill>> {
 }
 
 fn walk_for_skill_files(dir: &Path, repo_url: &str, skills: &mut Vec<Skill>) -> Result<()> {
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("reading directory {}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("reading directory {}", dir.display()))?;
 
     for entry in entries {
         let entry = entry?;

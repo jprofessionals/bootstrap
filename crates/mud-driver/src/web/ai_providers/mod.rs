@@ -112,7 +112,10 @@ mod integration_tests {
         // The body should contain the original messages, tools, and system verbatim
         assert_eq!(result.body["messages"], req.messages);
         assert_eq!(result.body["tools"], req.tools.unwrap());
-        assert_eq!(result.body["system"], serde_json::json!("You are a helpful weather assistant."));
+        assert_eq!(
+            result.body["system"],
+            serde_json::json!("You are a helpful weather assistant.")
+        );
         assert_eq!(result.body["stream"], true);
         assert_eq!(result.body["max_tokens"], 4096);
     }
@@ -122,18 +125,40 @@ mod integration_tests {
         let mut provider = anthropic::AnthropicProvider::new();
 
         let test_events = vec![
-            ("message_start", r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250929"}}"#),
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The weather"}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" in Oslo is sunny."}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250929"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The weather"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" in Oslo is sunny."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
         for (event_type, data) in &test_events {
             let result = provider.translate_event(event_type, data);
-            assert_eq!(result.len(), 1, "Anthropic passthrough should emit exactly 1 event per input");
+            assert_eq!(
+                result.len(),
+                1,
+                "Anthropic passthrough should emit exactly 1 event per input"
+            );
             assert_eq!(result[0].event_type, *event_type);
             assert_eq!(result[0].data, *data);
         }
@@ -154,7 +179,10 @@ mod integration_tests {
         // System prompt should be first message
         let messages = result.body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
-        assert_eq!(messages[0]["content"], "You are a helpful weather assistant.");
+        assert_eq!(
+            messages[0]["content"],
+            "You are a helpful weather assistant."
+        );
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[1]["content"], "What is the weather in Oslo?");
 
@@ -176,7 +204,8 @@ mod integration_tests {
             "model": "gpt-4o",
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Let me "}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
 
         // Chunk 2: more text
         let chunk2 = serde_json::json!({
@@ -184,7 +213,8 @@ mod integration_tests {
             "model": "gpt-4o",
             "choices": [{"index": 0, "delta": {"content": "check the weather."}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
 
         // Chunk 3: tool call start (id + name + empty args)
         let chunk3 = serde_json::json!({
@@ -197,7 +227,8 @@ mod integration_tests {
                 "function": {"name": "get_weather", "arguments": ""}
             }]}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
 
         // Chunk 4: tool call args fragment 1
         let chunk4 = serde_json::json!({
@@ -208,7 +239,8 @@ mod integration_tests {
                 "function": {"arguments": "{\"loca"}
             }]}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk4).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk4).unwrap()));
 
         // Chunk 5: tool call args fragment 2
         let chunk5 = serde_json::json!({
@@ -219,7 +251,8 @@ mod integration_tests {
                 "function": {"arguments": "tion\":\"Oslo\"}"}
             }]}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk5).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk5).unwrap()));
 
         // Chunk 6: finish with tool_calls reason
         let chunk6 = serde_json::json!({
@@ -227,7 +260,8 @@ mod integration_tests {
             "model": "gpt-4o",
             "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk6).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk6).unwrap()));
 
         // Chunk 7: [DONE]
         all_events.extend(provider.translate_event("message", "[DONE]"));
@@ -239,20 +273,20 @@ mod integration_tests {
             vec![
                 // Chunk 1: first chunk triggers message_start, then text block opens
                 "message_start",
-                "content_block_start",  // text block
-                "content_block_delta",  // "Let me "
+                "content_block_start", // text block
+                "content_block_delta", // "Let me "
                 // Chunk 2: continuing text
-                "content_block_delta",  // "check the weather."
+                "content_block_delta", // "check the weather."
                 // Chunk 3: tool call starts — close text block first
-                "content_block_stop",   // close text block
-                "content_block_start",  // tool_use block
+                "content_block_stop",  // close text block
+                "content_block_start", // tool_use block
                 // Chunk 4: args fragment
-                "content_block_delta",  // input_json_delta
+                "content_block_delta", // input_json_delta
                 // Chunk 5: args fragment
-                "content_block_delta",  // input_json_delta
+                "content_block_delta", // input_json_delta
                 // Chunk 6: finish
-                "content_block_stop",   // close tool block
-                "message_delta",        // stop_reason: tool_use
+                "content_block_stop", // close tool block
+                "message_delta",      // stop_reason: tool_use
                 // Chunk 7: [DONE]
                 "message_stop",
             ]
@@ -304,21 +338,24 @@ mod integration_tests {
             "model": "gpt-4o",
             "choices": [{"delta": {"role": "assistant", "content": "Hello, "}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
 
         // Chunk 2: more text
         let chunk2 = serde_json::json!({
             "model": "gpt-4o",
             "choices": [{"delta": {"content": "how can I help?"}, "finish_reason": null}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
 
         // Chunk 3: finish
         let chunk3 = serde_json::json!({
             "model": "gpt-4o",
             "choices": [{"delta": {}, "finish_reason": "stop"}]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
 
         // Chunk 4: [DONE]
         all_events.extend(provider.translate_event("message", "[DONE]"));
@@ -363,7 +400,10 @@ mod integration_tests {
         // Contents (messages)
         let contents = result.body["contents"].as_array().unwrap();
         assert_eq!(contents[0]["role"], "user");
-        assert_eq!(contents[0]["parts"][0]["text"], "What is the weather in Oslo?");
+        assert_eq!(
+            contents[0]["parts"][0]["text"],
+            "What is the weather in Oslo?"
+        );
 
         // Tools as functionDeclarations
         let tools = result.body["tools"].as_array().unwrap();
@@ -386,7 +426,8 @@ mod integration_tests {
                 }
             }]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
 
         // Chunk 2: more text
         let chunk2 = serde_json::json!({
@@ -397,7 +438,8 @@ mod integration_tests {
                 }
             }]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
 
         // Chunk 3: function call with finish
         let chunk3 = serde_json::json!({
@@ -414,7 +456,8 @@ mod integration_tests {
                 "finishReason": "STOP"
             }]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk3).unwrap()));
 
         // Verify the full event sequence
         let types = event_types(&all_events);
@@ -423,16 +466,16 @@ mod integration_tests {
             vec![
                 // Chunk 1: first chunk
                 "message_start",
-                "content_block_start",  // text block (index 0)
-                "content_block_delta",  // text delta
+                "content_block_start", // text block (index 0)
+                "content_block_delta", // text delta
                 // Chunk 2: more text
-                "content_block_delta",  // text delta
+                "content_block_delta", // text delta
                 // Chunk 3: function call — close text, emit tool, finish
-                "content_block_stop",   // close text block
-                "content_block_start",  // tool_use block (index 1)
-                "content_block_delta",  // input_json_delta
-                "content_block_stop",   // close tool block
-                "message_delta",        // stop_reason: tool_use
+                "content_block_stop",  // close text block
+                "content_block_start", // tool_use block (index 1)
+                "content_block_delta", // input_json_delta
+                "content_block_stop",  // close tool block
+                "message_delta",       // stop_reason: tool_use
                 "message_stop",
             ]
         );
@@ -446,7 +489,10 @@ mod integration_tests {
         assert_eq!(text_start["index"], 0);
 
         let text_delta1 = parse_data(&all_events[2]);
-        assert_eq!(text_delta1["delta"]["text"], "Let me look up the weather for you.");
+        assert_eq!(
+            text_delta1["delta"]["text"],
+            "Let me look up the weather for you."
+        );
 
         let text_delta2 = parse_data(&all_events[3]);
         assert_eq!(text_delta2["delta"]["text"], " Checking now...");
@@ -482,7 +528,8 @@ mod integration_tests {
                 }
             }]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap()));
 
         // Chunk 2: finish with text
         let chunk2 = serde_json::json!({
@@ -494,7 +541,8 @@ mod integration_tests {
                 "finishReason": "STOP"
             }]
         });
-        all_events.extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
+        all_events
+            .extend(provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap()));
 
         let types = event_types(&all_events);
         assert_eq!(
@@ -536,19 +584,41 @@ mod integration_tests {
         // --- Anthropic (passthrough) ---
         let mut anthropic = anthropic::AnthropicProvider::new();
         let anthropic_events_data = vec![
-            ("message_start", r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250929"}}"#),
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250929"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
         let mut anthro_all = Vec::new();
         for (et, data) in anthropic_events_data {
             anthro_all.extend(anthropic.translate_event(et, data));
         }
-        assert_eq!(event_types(&anthro_all), expected_types, "Anthropic event types mismatch");
+        assert_eq!(
+            event_types(&anthro_all),
+            expected_types,
+            "Anthropic event types mismatch"
+        );
 
         // --- OpenAI ---
         let mut openai = openai::OpenAiProvider::new();
@@ -559,10 +629,15 @@ mod integration_tests {
             serde_json::json!({"model":"gpt-4o","choices":[{"delta":{},"finish_reason":"stop"}]}),
         ];
         for chunk in &oai_chunks {
-            openai_all.extend(openai.translate_event("message", &serde_json::to_string(chunk).unwrap()));
+            openai_all
+                .extend(openai.translate_event("message", &serde_json::to_string(chunk).unwrap()));
         }
         openai_all.extend(openai.translate_event("message", "[DONE]"));
-        assert_eq!(event_types(&openai_all), expected_types, "OpenAI event types mismatch");
+        assert_eq!(
+            event_types(&openai_all),
+            expected_types,
+            "OpenAI event types mismatch"
+        );
 
         // --- Gemini ---
         let mut gemini = gemini::GeminiProvider::new();
@@ -572,9 +647,14 @@ mod integration_tests {
             serde_json::json!({"candidates":[{"content":{"parts":[{"text":"world"}],"role":"model"},"finishReason":"STOP"}]}),
         ];
         for chunk in &gem_chunks {
-            gemini_all.extend(gemini.translate_event("message", &serde_json::to_string(chunk).unwrap()));
+            gemini_all
+                .extend(gemini.translate_event("message", &serde_json::to_string(chunk).unwrap()));
         }
-        assert_eq!(event_types(&gemini_all), expected_types, "Gemini event types mismatch");
+        assert_eq!(
+            event_types(&gemini_all),
+            expected_types,
+            "Gemini event types mismatch"
+        );
     }
 
     #[test]
@@ -594,7 +674,8 @@ mod integration_tests {
             serde_json::json!({"model":"gpt-4o","choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
         ];
         for chunk in &oai_chunks {
-            openai_all.extend(openai.translate_event("message", &serde_json::to_string(chunk).unwrap()));
+            openai_all
+                .extend(openai.translate_event("message", &serde_json::to_string(chunk).unwrap()));
         }
         openai_all.extend(openai.translate_event("message", "[DONE]"));
 
@@ -610,33 +691,58 @@ mod integration_tests {
                 "finishReason": "STOP"
             }]
         });
-        gemini_all.extend(gemini.translate_event("message", &serde_json::to_string(&gem_chunk).unwrap()));
+        gemini_all
+            .extend(gemini.translate_event("message", &serde_json::to_string(&gem_chunk).unwrap()));
 
         // Both should start with message_start and end with message_delta + message_stop
         let oai_types = event_types(&openai_all);
         let gem_types = event_types(&gemini_all);
 
-        assert_eq!(oai_types.first(), Some(&"message_start"), "OpenAI should start with message_start");
-        assert_eq!(gem_types.first(), Some(&"message_start"), "Gemini should start with message_start");
+        assert_eq!(
+            oai_types.first(),
+            Some(&"message_start"),
+            "OpenAI should start with message_start"
+        );
+        assert_eq!(
+            gem_types.first(),
+            Some(&"message_start"),
+            "Gemini should start with message_start"
+        );
 
-        assert_eq!(oai_types.last(), Some(&"message_stop"), "OpenAI should end with message_stop");
-        assert_eq!(gem_types.last(), Some(&"message_stop"), "Gemini should end with message_stop");
+        assert_eq!(
+            oai_types.last(),
+            Some(&"message_stop"),
+            "OpenAI should end with message_stop"
+        );
+        assert_eq!(
+            gem_types.last(),
+            Some(&"message_stop"),
+            "Gemini should end with message_stop"
+        );
 
         // Both should have a message_delta with stop_reason: tool_use
-        let oai_delta = openai_all.iter().find(|e| e.event_type == "message_delta").unwrap();
-        let gem_delta = gemini_all.iter().find(|e| e.event_type == "message_delta").unwrap();
+        let oai_delta = openai_all
+            .iter()
+            .find(|e| e.event_type == "message_delta")
+            .unwrap();
+        let gem_delta = gemini_all
+            .iter()
+            .find(|e| e.event_type == "message_delta")
+            .unwrap();
         let oai_data = parse_data(oai_delta);
         let gem_data = parse_data(gem_delta);
         assert_eq!(oai_data["delta"]["stop_reason"], "tool_use");
         assert_eq!(gem_data["delta"]["stop_reason"], "tool_use");
 
         // Both should have content_block_start with type: tool_use
-        let oai_tool_start = openai_all.iter().find(|e| {
-            e.event_type == "content_block_start" && e.data.contains("tool_use")
-        }).unwrap();
-        let gem_tool_start = gemini_all.iter().find(|e| {
-            e.event_type == "content_block_start" && e.data.contains("tool_use")
-        }).unwrap();
+        let oai_tool_start = openai_all
+            .iter()
+            .find(|e| e.event_type == "content_block_start" && e.data.contains("tool_use"))
+            .unwrap();
+        let gem_tool_start = gemini_all
+            .iter()
+            .find(|e| e.event_type == "content_block_start" && e.data.contains("tool_use"))
+            .unwrap();
         let oai_ts = parse_data(oai_tool_start);
         let gem_ts = parse_data(gem_tool_start);
         assert_eq!(oai_ts["content_block"]["type"], "tool_use");
@@ -645,8 +751,14 @@ mod integration_tests {
         assert_eq!(gem_ts["content_block"]["name"], "get_weather");
 
         // Both should have input_json_delta with the args
-        let oai_args_event = openai_all.iter().find(|e| e.data.contains("input_json_delta")).unwrap();
-        let gem_args_event = gemini_all.iter().find(|e| e.data.contains("input_json_delta")).unwrap();
+        let oai_args_event = openai_all
+            .iter()
+            .find(|e| e.data.contains("input_json_delta"))
+            .unwrap();
+        let gem_args_event = gemini_all
+            .iter()
+            .find(|e| e.data.contains("input_json_delta"))
+            .unwrap();
         let oai_args_data = parse_data(oai_args_event);
         let gem_args_data = parse_data(gem_args_event);
         assert_eq!(oai_args_data["delta"]["type"], "input_json_delta");
@@ -679,8 +791,10 @@ mod integration_tests {
         // All should have stream=true (Anthropic and OpenAI in body, Gemini in URL)
         assert_eq!(a_req.body["stream"], true);
         assert_eq!(o_req.body["stream"], true);
-        assert!(g_req.url.contains("stream") || g_req.body.get("stream").is_none(),
-            "Gemini uses SSE via URL param, not body");
+        assert!(
+            g_req.url.contains("stream") || g_req.body.get("stream").is_none(),
+            "Gemini uses SSE via URL param, not body"
+        );
 
         // All should include the user message content somewhere
         let a_str = serde_json::to_string(&a_req.body).unwrap();

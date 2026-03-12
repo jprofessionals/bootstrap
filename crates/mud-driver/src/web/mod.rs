@@ -1,12 +1,12 @@
 pub mod ai;
+pub mod ai_providers;
 pub mod build_log;
 pub mod build_manager;
-pub mod ai_providers;
 pub mod editor_files;
 pub mod git_http;
+pub mod project;
+pub mod repos;
 pub mod server;
 pub mod session;
 pub mod skills;
-pub mod project;
-pub mod repos;
 pub mod static_files;

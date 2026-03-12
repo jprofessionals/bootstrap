@@ -187,7 +187,9 @@ fn include_with_resolver() {
             None
         }
     }));
-    let result = pp.process("#include \"header.h\"\nint local = 2;", "test.c").unwrap();
+    let result = pp
+        .process("#include \"header.h\"\nint local = 2;", "test.c")
+        .unwrap();
     assert!(result.contains("int included = 1;"));
     assert!(result.contains("int local = 2;"));
 }

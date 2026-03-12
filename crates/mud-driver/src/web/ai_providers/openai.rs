@@ -32,12 +32,11 @@ impl OpenAiProvider {
     fn system_to_message(system: &serde_json::Value) -> serde_json::Value {
         let text = match system {
             serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Array(arr) => {
-                arr.iter()
-                    .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("")
-            }
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join(""),
             _ => String::new(),
         };
         serde_json::json!({"role": "system", "content": text})
@@ -76,8 +75,7 @@ impl OpenAiProvider {
                             }
                             "tool_use" => {
                                 let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                                let name =
-                                    block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
                                 let input = &block["input"];
                                 tool_calls_list.push(serde_json::json!({
                                     "id": id,
@@ -98,9 +96,7 @@ impl OpenAiProvider {
                                     Some(serde_json::Value::String(s)) => s.clone(),
                                     Some(serde_json::Value::Array(arr)) => arr
                                         .iter()
-                                        .filter_map(
-                                            |b| b.get("text").and_then(|t| t.as_str()),
-                                        )
+                                        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
                                         .collect::<Vec<_>>()
                                         .join(""),
                                     _ => String::new(),
@@ -123,8 +119,7 @@ impl OpenAiProvider {
                                 serde_json::Value::String(text_parts.join(""));
                         }
                         if !tool_calls_list.is_empty() {
-                            assistant_msg["tool_calls"] =
-                                serde_json::Value::Array(tool_calls_list);
+                            assistant_msg["tool_calls"] = serde_json::Value::Array(tool_calls_list);
                         }
                         result.push(assistant_msg);
                     } else if !tool_results.is_empty() {
@@ -301,9 +296,7 @@ impl AiProvider for OpenAiProvider {
 
         for choice in choices {
             let delta = &choice["delta"];
-            let finish_reason = choice
-                .get("finish_reason")
-                .and_then(|f| f.as_str());
+            let finish_reason = choice.get("finish_reason").and_then(|f| f.as_str());
 
             // Handle text content
             if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
@@ -626,7 +619,10 @@ mod tests {
         // Should close text block + message_delta
         assert!(events.iter().any(|e| e.event_type == "content_block_stop"));
         assert!(events.iter().any(|e| e.event_type == "message_delta"));
-        let msg_delta = events.iter().find(|e| e.event_type == "message_delta").unwrap();
+        let msg_delta = events
+            .iter()
+            .find(|e| e.event_type == "message_delta")
+            .unwrap();
         let data: serde_json::Value = serde_json::from_str(&msg_delta.data).unwrap();
         assert_eq!(data["delta"]["stop_reason"], "end_turn");
 
@@ -656,7 +652,10 @@ mod tests {
         });
         let events = provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
 
-        let msg_delta = events.iter().find(|e| e.event_type == "message_delta").unwrap();
+        let msg_delta = events
+            .iter()
+            .find(|e| e.event_type == "message_delta")
+            .unwrap();
         let data: serde_json::Value = serde_json::from_str(&msg_delta.data).unwrap();
         assert_eq!(data["delta"]["stop_reason"], "tool_use");
     }

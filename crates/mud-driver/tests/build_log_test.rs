@@ -4,7 +4,12 @@ use mud_driver::web::build_log::{BuildLog, LogLevel};
 fn test_build_log_stores_and_retrieves_entries() {
     let log = BuildLog::new(100);
     log.append("testarea", LogLevel::Info, "compile", "Starting build");
-    log.append("testarea", LogLevel::Error, "compile", "Syntax error on line 5");
+    log.append(
+        "testarea",
+        LogLevel::Error,
+        "compile",
+        "Syntax error on line 5",
+    );
 
     let entries = log.recent("testarea", 10, None);
     assert_eq!(entries.len(), 2);
@@ -19,7 +24,12 @@ fn test_build_log_stores_and_retrieves_entries() {
 fn test_build_log_filters_by_level() {
     let log = BuildLog::new(100);
     log.append("testarea", LogLevel::Info, "compile", "Starting build");
-    log.append("testarea", LogLevel::Error, "compile", "Syntax error on line 5");
+    log.append(
+        "testarea",
+        LogLevel::Error,
+        "compile",
+        "Syntax error on line 5",
+    );
 
     let entries = log.recent("testarea", 10, Some(LogLevel::Error));
     assert_eq!(entries.len(), 1);

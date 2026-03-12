@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use mud_mop::codec::read_adapter_message;
 use mud_mop::message::{AdapterMessage, DriverMessage};
 use tokio::net::UnixListener;
@@ -54,23 +54,18 @@ impl AdapterManager {
         // Remove stale socket file if it exists.
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path).with_context(|| {
-                format!(
-                    "removing stale socket at {}",
-                    self.socket_path.display()
-                )
+                format!("removing stale socket at {}", self.socket_path.display())
             })?;
         }
 
         // Create parent directories.
         if let Some(parent) = self.socket_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("creating socket directory {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating socket directory {}", parent.display()))?;
         }
 
-        let listener = UnixListener::bind(&self.socket_path).with_context(|| {
-            format!("binding Unix socket at {}", self.socket_path.display())
-        })?;
+        let listener = UnixListener::bind(&self.socket_path)
+            .with_context(|| format!("binding Unix socket at {}", self.socket_path.display()))?;
         info!(path = %self.socket_path.display(), "listening for adapter connections");
 
         // Spawn configured adapters.
@@ -109,8 +104,14 @@ impl AdapterManager {
     /// Reads the initial handshake message, sets up bidirectional
     /// communication, and returns the primary language plus any additional
     /// languages the adapter can handle.
-    pub async fn accept_connection(&mut self, listener: &UnixListener) -> Result<(String, Vec<String>)> {
-        let (stream, _addr) = listener.accept().await.context("accepting adapter connection")?;
+    pub async fn accept_connection(
+        &mut self,
+        listener: &UnixListener,
+    ) -> Result<(String, Vec<String>)> {
+        let (stream, _addr) = listener
+            .accept()
+            .await
+            .context("accepting adapter connection")?;
         let (mut reader, writer) = stream.into_split();
 
         // The first message must be a Handshake.
@@ -141,7 +142,8 @@ impl AdapterManager {
             "adapter connected"
         );
 
-        let (conn, mut adapter_rx) = AdapterConnection::spawn(reader, writer, adapter_name, language.clone());
+        let (conn, mut adapter_rx) =
+            AdapterConnection::spawn(reader, writer, adapter_name, language.clone());
 
         // Forward this adapter's messages into the merged incoming channel,
         // tagging each with the source language.

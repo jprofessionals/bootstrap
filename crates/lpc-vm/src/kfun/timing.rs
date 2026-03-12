@@ -3,8 +3,8 @@
 
 use std::time::SystemTime;
 
+use super::{require_int, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_int, require_string};
 
 /// time() -> int
 ///
@@ -151,10 +151,7 @@ pub fn kf_call_out(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue
 /// Cancel a pending call_out. Returns remaining delay, or nil if not found.
 ///
 /// TODO: Full implementation requires scheduler integration.
-pub fn kf_remove_call_out(
-    _ctx: &mut KfunContext,
-    args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_remove_call_out(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     let _handle = require_int(&args[0], 0)?;
     // TODO: Requires scheduler integration
     Err(LpcError::RuntimeError(

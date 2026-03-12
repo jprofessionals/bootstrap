@@ -27,14 +27,15 @@ async fn editor_operations() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("entrance.rb"), "should have default entrance file");
+    assert!(
+        body.contains("entrance.rb"),
+        "should have default entrance file"
+    );
 
     // 3. Read a file
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/rooms/entrance.rb?repo=alice/alice",
-        ))
+        .get(server.url("/api/editor/files/rooms/entrance.rb?repo=alice/alice"))
         .send()
         .await
         .unwrap();
@@ -57,9 +58,7 @@ async fn editor_operations() {
     // 5. Read back the created file
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/rooms/treasure_room.rb?repo=alice/alice",
-        ))
+        .get(server.url("/api/editor/files/rooms/treasure_room.rb?repo=alice/alice"))
         .send()
         .await
         .unwrap();
@@ -82,9 +81,7 @@ async fn editor_operations() {
     // 7. Verify the update
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/rooms/treasure_room.rb?repo=alice/alice",
-        ))
+        .get(server.url("/api/editor/files/rooms/treasure_room.rb?repo=alice/alice"))
         .send()
         .await
         .unwrap();
@@ -94,9 +91,7 @@ async fn editor_operations() {
     // 8. Delete the file
     let resp = server
         .client
-        .delete(server.url(
-            "/api/editor/files/rooms/treasure_room.rb?repo=alice/alice",
-        ))
+        .delete(server.url("/api/editor/files/rooms/treasure_room.rb?repo=alice/alice"))
         .send()
         .await
         .unwrap();
@@ -105,9 +100,7 @@ async fn editor_operations() {
     // 9. Verify deletion
     let resp = server
         .client
-        .get(server.url(
-            "/api/editor/files/rooms/treasure_room.rb?repo=alice/alice",
-        ))
+        .get(server.url("/api/editor/files/rooms/treasure_room.rb?repo=alice/alice"))
         .send()
         .await
         .unwrap();

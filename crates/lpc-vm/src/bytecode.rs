@@ -173,21 +173,10 @@ pub enum OpCode {
     JumpIfTrue(i32),
 
     // Functions
-    Call {
-        func_idx: u16,
-        arg_count: u8,
-    },
-    CallOther {
-        arg_count: u8,
-    },
-    CallParent {
-        func_name: String,
-        arg_count: u8,
-    },
-    CallKfun {
-        kfun_id: u16,
-        arg_count: u8,
-    },
+    Call { func_idx: u16, arg_count: u8 },
+    CallOther { arg_count: u8 },
+    CallParent { func_name: String, arg_count: u8 },
+    CallKfun { kfun_id: u16, arg_count: u8 },
     Return,
     ReturnNil,
 

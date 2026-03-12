@@ -2,21 +2,21 @@
 //!
 //! All 117+ DGD kernel functions organized by category.
 
-pub mod type_ops;
-pub mod string;
 pub mod array;
+pub mod asn;
+pub mod connection;
+pub mod crypto;
+pub mod editor;
+pub mod io;
 pub mod mapping;
 pub mod math;
-pub mod asn;
-pub mod object;
-pub mod timing;
-pub mod io;
-pub mod connection;
-pub mod serialize;
-pub mod crypto;
 pub mod misc;
-pub mod editor;
+pub mod object;
 pub mod parse;
+pub mod serialize;
+pub mod string;
+pub mod timing;
+pub mod type_ops;
 
 use std::collections::HashMap;
 
@@ -247,7 +247,12 @@ impl KfunRegistry {
         // Connection/networking (additional driver service stubs)
         self.register("connect", connection::kf_connect, 2, 3);
         self.register("connect_datagram", connection::kf_connect_datagram, 3, 4);
-        self.register("datagram_challenge", connection::kf_datagram_challenge, 1, 1);
+        self.register(
+            "datagram_challenge",
+            connection::kf_datagram_challenge,
+            1,
+            1,
+        );
         self.register("send_close", connection::kf_send_close, 0, 0);
         self.register("send_datagram", connection::kf_send_datagram, 1, 1);
         self.register("block_input", connection::kf_block_input, 1, 1);

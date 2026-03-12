@@ -40,11 +40,19 @@ pub enum CachePolicy {
 pub enum DriverMessage {
     /// Ask the adapter to load an area from disk.
     #[serde(rename = "load_area")]
-    LoadArea { area_id: AreaId, path: String, db_url: Option<String> },
+    LoadArea {
+        area_id: AreaId,
+        path: String,
+        db_url: Option<String>,
+    },
 
     /// Ask the adapter to reload a previously loaded area.
     #[serde(rename = "reload_area")]
-    ReloadArea { area_id: AreaId, path: String, db_url: Option<String> },
+    ReloadArea {
+        area_id: AreaId,
+        path: String,
+        db_url: Option<String>,
+    },
 
     /// Ask the adapter to unload an area and free its resources.
     #[serde(rename = "unload_area")]
@@ -59,10 +67,7 @@ pub enum DriverMessage {
 
     /// A line of input from a player session.
     #[serde(rename = "session_input")]
-    SessionInput {
-        session_id: SessionId,
-        line: String,
-    },
+    SessionInput { session_id: SessionId, line: String },
 
     /// A player session has ended.
     #[serde(rename = "session_end")]
@@ -115,10 +120,7 @@ pub enum DriverMessage {
 
     /// Ask the adapter to provide web template data for an area.
     #[serde(rename = "get_web_data")]
-    GetWebData {
-        request_id: u64,
-        area_key: String,
-    },
+    GetWebData { request_id: u64, area_key: String },
 }
 
 /// Messages sent from a language adapter back to the driver.
@@ -135,10 +137,7 @@ pub enum AdapterMessage {
 
     /// Text output destined for a player session.
     #[serde(rename = "session_output")]
-    SessionOutput {
-        session_id: SessionId,
-        text: String,
-    },
+    SessionOutput { session_id: SessionId, text: String },
 
     /// Successful result from a `Call` request.
     #[serde(rename = "call_result")]
@@ -221,9 +220,7 @@ pub enum AdapterMessage {
 
     /// Notify all adapters that cached values for these objects are stale.
     #[serde(rename = "invalidate_cache")]
-    InvalidateCache {
-        object_ids: Vec<ObjectId>,
-    },
+    InvalidateCache { object_ids: Vec<ObjectId> },
 }
 
 #[cfg(test)]
@@ -299,8 +296,16 @@ mod tests {
         // Deserialize as the real AdapterMessage — languages should default to empty
         let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
         match decoded {
-            AdapterMessage::Handshake { languages, adapter_name, language, .. } => {
-                assert!(languages.is_empty(), "languages should default to empty vec");
+            AdapterMessage::Handshake {
+                languages,
+                adapter_name,
+                language,
+                ..
+            } => {
+                assert!(
+                    languages.is_empty(),
+                    "languages should default to empty vec"
+                );
                 assert_eq!(adapter_name, "mud-adapter-ruby");
                 assert_eq!(language, "ruby");
             }
@@ -552,9 +557,7 @@ mod tests {
         let msg = AdapterMessage::DriverRequest {
             request_id: 11,
             action: "list_players".into(),
-            params: Value::Map(HashMap::from([
-                ("limit".into(), Value::Int(10)),
-            ])),
+            params: Value::Map(HashMap::from([("limit".into(), Value::Int(10))])),
         };
         let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
         let decoded: AdapterMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
@@ -566,7 +569,9 @@ mod tests {
         let msg = DriverMessage::LoadArea {
             area_id: AreaId::new("game", "tavern"),
             path: "/world/game/tavern".into(),
-            db_url: Some("postgres://mud_area_game_tavern:secret@localhost:5432/mud_area_game_tavern".into()),
+            db_url: Some(
+                "postgres://mud_area_game_tavern:secret@localhost:5432/mud_area_game_tavern".into(),
+            ),
         };
         let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
         let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
@@ -656,9 +661,10 @@ mod tests {
 
     #[test]
     fn value_clone() {
-        let val = Value::Map(HashMap::from([
-            ("key".into(), Value::String("value".into())),
-        ]));
+        let val = Value::Map(HashMap::from([(
+            "key".into(),
+            Value::String("value".into()),
+        )]));
         let cloned = val.clone();
         assert_eq!(val, cloned);
     }

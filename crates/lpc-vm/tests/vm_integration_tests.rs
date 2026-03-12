@@ -11,7 +11,9 @@ fn eval(source: &str, func_name: &str, args: &[LpcValue]) -> Result<LpcValue, St
     let mut parser = Parser::new(tokens);
     let program_ast = parser.parse_program().map_err(|e| format!("parse: {e}"))?;
     let mut compiler = Compiler::new();
-    let mut compiled = compiler.compile(&program_ast).map_err(|e| format!("compile: {e}"))?;
+    let mut compiled = compiler
+        .compile(&program_ast)
+        .map_err(|e| format!("compile: {e}"))?;
     compiled.path = "/test".to_string();
     let mut vm = Vm::new();
     let obj = vm.load_program(compiled);
@@ -336,9 +338,18 @@ int test(int x) {
     }
 }
 ";
-    assert_eq!(eval(src, "test", &[LpcValue::Int(1)]).unwrap().as_int(), Some(10));
-    assert_eq!(eval(src, "test", &[LpcValue::Int(2)]).unwrap().as_int(), Some(20));
-    assert_eq!(eval(src, "test", &[LpcValue::Int(99)]).unwrap().as_int(), Some(0));
+    assert_eq!(
+        eval(src, "test", &[LpcValue::Int(1)]).unwrap().as_int(),
+        Some(10)
+    );
+    assert_eq!(
+        eval(src, "test", &[LpcValue::Int(2)]).unwrap().as_int(),
+        Some(20)
+    );
+    assert_eq!(
+        eval(src, "test", &[LpcValue::Int(99)]).unwrap().as_int(),
+        Some(0)
+    );
 }
 
 // =========================================================================

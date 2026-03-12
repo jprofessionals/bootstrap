@@ -50,7 +50,10 @@ async fn builder_template_rendering() {
         Duration::from_secs(15),
     )
     .await;
-    assert!(body.contains("Rooms:"), "builder page should list rooms section");
+    assert!(
+        body.contains("Rooms:"),
+        "builder page should list rooms section"
+    );
 }
 
 /// Test @dev branch access control (proxied to Ruby portal's BuilderApp).

@@ -96,10 +96,7 @@ async fn create_repo_handler(
     Json(body): Json<CreateRepoRequest>,
 ) -> Response {
     if body.namespace.is_empty() || body.name.is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "namespace and name are required",
-        );
+        return error_response(StatusCode::BAD_REQUEST, "namespace and name are required");
     }
 
     let templates = state.area_templates.read().await;
@@ -135,9 +132,5 @@ async fn create_repo_handler(
 }
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    (
-        status,
-        Json(serde_json::json!({ "error": message.into() })),
-    )
-        .into_response()
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }

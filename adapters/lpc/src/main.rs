@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     };
     write_adapter_message(&mut writer, &handshake).await?;
     tracing::info!("handshake sent");
+    send_area_template(&mut writer, "lpc", embedded_lpc_template_files()).await?;
 
     let mut state = AdapterState {
         areas: HashMap::new(),
@@ -109,6 +110,63 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn send_area_template<W>(
+    writer: &mut W,
+    template_name: &str,
+    files: HashMap<String, Value>,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if files.is_empty() {
+        tracing::warn!(
+            template = template_name,
+            "template directory was empty"
+        );
+        return Ok(());
+    }
+
+    write_adapter_message(
+        writer,
+        &AdapterMessage::DriverRequest {
+            request_id: 1,
+            action: "set_area_template".into(),
+            params: Value::Map(HashMap::from([
+                ("name".into(), Value::String(template_name.into())),
+                ("files".into(), Value::Map(files)),
+            ])),
+        },
+    )
+    .await?;
+    tracing::info!(template = template_name, "sent area template");
+    Ok(())
+}
+
+fn embedded_lpc_template_files() -> HashMap<String, Value> {
+    HashMap::from([
+        (
+            "agents.md".into(),
+            Value::String(include_str!("../templates/area/lpc/agents.md").into()),
+        ),
+        (
+            "mud.yaml".into(),
+            Value::String(include_str!("../templates/area/lpc/mud.yaml").into()),
+        ),
+        (
+            "rooms/entrance.c".into(),
+            Value::String(include_str!("../templates/area/lpc/rooms/entrance.c").into()),
+        ),
+        (
+            "rooms/hall.c".into(),
+            Value::String(include_str!("../templates/area/lpc/rooms/hall.c").into()),
+        ),
+        (
+            "daemons/area_daemon.c".into(),
+            Value::String(include_str!("../templates/area/lpc/daemons/area_daemon.c").into()),
+        ),
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -158,11 +216,7 @@ async fn handle_message(state: &mut AdapterState, msg: DriverMessage) -> Vec<Ada
             path,
             files,
         } => {
-            tracing::info!(
-                "reloading {} files in area {}",
-                files.len(),
-                area_id
-            );
+            tracing::info!("reloading {} files in area {}", files.len(), area_id);
             reload_programs(state, &area_id, &path, &files)
         }
 
@@ -218,14 +272,11 @@ async fn handle_message(state: &mut AdapterState, msg: DriverMessage) -> Vec<Ada
                 action
             );
             // Allow all access for now
-            let result = Value::Map(HashMap::from([(
-                "allowed".into(),
-                Value::Bool(true),
-            )]));
-            vec![AdapterMessage::DriverRequest {
+            let result = Value::Map(HashMap::from([("allowed".into(), Value::Bool(true))]));
+            vec![AdapterMessage::CallResult {
                 request_id,
-                action: "request_response".into(),
-                params: result,
+                result,
+                cache: None,
             }]
         }
 
@@ -237,10 +288,7 @@ async fn handle_message(state: &mut AdapterState, msg: DriverMessage) -> Vec<Ada
             vec![handle_get_web_data(state, request_id, &area_key)]
         }
 
-        DriverMessage::RequestResponse {
-            request_id,
-            result,
-        } => {
+        DriverMessage::RequestResponse { request_id, result } => {
             tracing::debug!(
                 "received request_response for id={}: {:?}",
                 request_id,
@@ -249,15 +297,8 @@ async fn handle_message(state: &mut AdapterState, msg: DriverMessage) -> Vec<Ada
             vec![]
         }
 
-        DriverMessage::RequestError {
-            request_id,
-            error,
-        } => {
-            tracing::warn!(
-                "received request_error for id={}: {}",
-                request_id,
-                error
-            );
+        DriverMessage::RequestError { request_id, error } => {
+            tracing::warn!("received request_error for id={}: {}", request_id, error);
             vec![]
         }
     }
@@ -333,11 +374,7 @@ fn load_area_internal(
             .map_err(|e| anyhow::anyhow!("reading {}: {}", full_path.display(), e))?;
 
         // The object path in the VM is area_key/relative_path (without .c extension)
-        let object_path = format!(
-            "/{}/{}",
-            area_key,
-            relative_path.trim_end_matches(".c")
-        );
+        let object_path = format!("/{}/{}", area_key, relative_path.trim_end_matches(".c"));
 
         match state.vm.compile_and_load(&object_path, &source) {
             Ok(obj_ref) => {
@@ -358,11 +395,7 @@ fn load_area_internal(
             }
             Err(e) => {
                 tracing::error!("compile failed for {}: {}", relative_path, e);
-                return Err(anyhow::anyhow!(
-                    "compile error in {}: {}",
-                    relative_path,
-                    e
-                ));
+                return Err(anyhow::anyhow!("compile error in {}: {}", relative_path, e));
             }
         }
     }
@@ -376,11 +409,7 @@ fn load_area_internal(
 }
 
 /// Recursively collect all .c files relative to the root path.
-fn collect_c_files(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<String>,
-) -> anyhow::Result<()> {
+fn collect_c_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> anyhow::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -445,11 +474,7 @@ fn reload_programs(
         }
 
         let full_path = area_path.join(file);
-        let object_path = format!(
-            "/{}/{}",
-            area_key,
-            file.trim_end_matches(".c")
-        );
+        let object_path = format!("/{}/{}", area_key, file.trim_end_matches(".c"));
 
         let source = match std::fs::read_to_string(&full_path) {
             Ok(s) => s,
@@ -545,10 +570,7 @@ fn handle_session_start(
                 match state.vm.call_function(&obj_ref, "on_connect", &args) {
                     Ok(result) => {
                         if let LpcValue::String(text) = result {
-                            responses.push(AdapterMessage::SessionOutput {
-                                session_id,
-                                text,
-                            });
+                            responses.push(AdapterMessage::SessionOutput { session_id, text });
                         }
                     }
                     Err(e) => {
@@ -628,10 +650,7 @@ fn handle_session_input(
     }]
 }
 
-fn handle_session_end(
-    state: &mut AdapterState,
-    session_id: SessionId,
-) -> Vec<AdapterMessage> {
+fn handle_session_end(state: &mut AdapterState, session_id: SessionId) -> Vec<AdapterMessage> {
     if let Some(session) = state.sessions.remove(&session_id) {
         // Try to call on_disconnect on the area daemon
         if let Some(area_key) = &session.area_key {
@@ -642,9 +661,7 @@ fn handle_session_end(
                         LpcValue::Int(session_id as i64),
                         LpcValue::String(session.username.clone()),
                     ];
-                    if let Err(e) =
-                        state.vm.call_function(&obj_ref, "on_disconnect", &args)
-                    {
+                    if let Err(e) = state.vm.call_function(&obj_ref, "on_disconnect", &args) {
                         tracing::warn!("on_disconnect failed: {}", e);
                     }
                 }
@@ -802,12 +819,55 @@ fn lpc_value_to_string(value: &LpcValue) -> String {
         LpcValue::Mapping(pairs) => {
             let items: Vec<String> = pairs
                 .iter()
-                .map(|(k, v)| {
-                    format!("{}: {}", lpc_value_to_string(k), lpc_value_to_string(v))
-                })
+                .map(|(k, v)| format!("{}: {}", lpc_value_to_string(k), lpc_value_to_string(v)))
                 .collect();
             format!("([ {} ])", items.join(", "))
         }
         LpcValue::Object(obj_ref) => format!("object:{}#{}", obj_ref.path, obj_ref.id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_template_files_includes_lpc_sources() {
+        let files = embedded_lpc_template_files();
+
+        assert!(files.contains_key("mud.yaml"));
+        assert!(files.contains_key("rooms/entrance.c"));
+        assert!(files.contains_key("daemons/area_daemon.c"));
+    }
+
+    #[tokio::test]
+    async fn check_builder_access_returns_call_result() {
+        let mut state = AdapterState {
+            areas: HashMap::new(),
+            sessions: HashMap::new(),
+            vm: Vm::new(),
+            stdlib_db_url: None,
+        };
+
+        let responses = handle_message(
+            &mut state,
+            DriverMessage::CheckBuilderAccess {
+                request_id: 42,
+                user: "alice".into(),
+                namespace: "ns".into(),
+                area: "area".into(),
+                action: "read".into(),
+            },
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            vec![AdapterMessage::CallResult {
+                request_id: 42,
+                result: Value::Map(HashMap::from([("allowed".into(), Value::Bool(true),)])),
+                cache: None,
+            }]
+        );
     }
 }

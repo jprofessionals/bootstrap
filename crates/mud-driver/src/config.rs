@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -54,8 +54,7 @@ impl Config {
 
     /// Parse a YAML string into a `Config` (useful for testing).
     pub fn from_yaml(yaml: &str) -> Result<Self> {
-        let cfg: Self =
-            serde_yaml::from_str(yaml).context("failed to parse YAML configuration")?;
+        let cfg: Self = serde_yaml::from_str(yaml).context("failed to parse YAML configuration")?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -166,13 +165,21 @@ impl WorldConfig {
     /// Resolve `path` relative to `data_path` (unless it is absolute).
     pub fn resolved_path(&self) -> std::path::PathBuf {
         let p = std::path::Path::new(&self.path);
-        if p.is_absolute() { p.to_path_buf() } else { std::path::Path::new(&self.data_path).join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            std::path::Path::new(&self.data_path).join(p)
+        }
     }
 
     /// Resolve `git_path` relative to `data_path` (unless it is absolute).
     pub fn resolved_git_path(&self) -> std::path::PathBuf {
         let p = std::path::Path::new(&self.git_path);
-        if p.is_absolute() { p.to_path_buf() } else { std::path::Path::new(&self.data_path).join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            std::path::Path::new(&self.data_path).join(p)
+        }
     }
 }
 
@@ -446,7 +453,10 @@ adapters:
         assert_eq!(cfg.path, "world");
         assert_eq!(cfg.git_path, "git-server");
         assert_eq!(cfg.resolved_path(), std::path::PathBuf::from("data/world"));
-        assert_eq!(cfg.resolved_git_path(), std::path::PathBuf::from("data/git-server"));
+        assert_eq!(
+            cfg.resolved_git_path(),
+            std::path::PathBuf::from("data/git-server")
+        );
     }
 
     #[test]
@@ -542,7 +552,10 @@ adapters:
     enabled: true
 "#;
         let cfg = Config::from_yaml(yaml).unwrap();
-        assert_eq!(cfg.adapters.default_template.as_deref(), Some("kotlin:ktor"));
+        assert_eq!(
+            cfg.adapters.default_template.as_deref(),
+            Some("kotlin:ktor")
+        );
     }
 
     #[test]

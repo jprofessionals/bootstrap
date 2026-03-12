@@ -1,6 +1,6 @@
-use std::path::Path;
 use anyhow::Result;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 const PRE_RECEIVE_HOOK: &str = r#"#!/bin/sh
 while read oldrev newrev refname; do

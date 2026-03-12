@@ -1,7 +1,7 @@
 //! Hash and crypto kfuns: crypt, hash_crc16, hash_crc32, hash_string, encrypt, decrypt.
 
+use super::{require_int, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_string, require_int};
 
 // CRC-16/CCITT lookup table
 const CRC16_TABLE: [u16; 256] = {
@@ -96,9 +96,7 @@ pub fn kf_hash_string(_ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcVa
     let key = require_string(&args[0], 0)?;
     let table_size = require_int(&args[1], 1)?;
     if table_size <= 0 {
-        return Err(LpcError::ValueError(
-            "table_size must be positive".into(),
-        ));
+        return Err(LpcError::ValueError("table_size must be positive".into()));
     }
 
     // DJB2 hash

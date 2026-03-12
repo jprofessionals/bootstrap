@@ -81,7 +81,10 @@ async fn spa_build_and_serve() {
 
     // Extract the full asset path (up to the closing quote)
     let rest = &body[asset_start.unwrap()..];
-    let end = rest.find('"').or_else(|| rest.find('\'')).unwrap_or(rest.len());
+    let end = rest
+        .find('"')
+        .or_else(|| rest.find('\''))
+        .unwrap_or(rest.len());
     let asset_path = &rest[..end];
 
     // Fetch the JS asset and verify it returns 200

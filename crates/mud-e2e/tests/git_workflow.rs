@@ -6,13 +6,23 @@ async fn git_workflow() {
     let server = TestServer::start().await;
 
     // 1. Register + login
-    server.register_user(&server.client, "alice", "secret123", "Warrior").await;
+    server
+        .register_user(&server.client, "alice", "secret123", "Warrior")
+        .await;
 
     // 2. Registration auto-creates area repo — verify via git API
-    let resp = server.client.get(server.url("/git/api/repos")).send().await.unwrap();
+    let resp = server
+        .client
+        .get(server.url("/git/api/repos"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("alice/alice"), "should have auto-created repo");
+    assert!(
+        body.contains("alice/alice"),
+        "should have auto-created repo"
+    );
 
     // 3. List branches
     let resp = server
@@ -35,7 +45,10 @@ async fn git_workflow() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Initial area template"), "should have initial commit");
+    assert!(
+        body.contains("Initial area template"),
+        "should have initial commit"
+    );
 
     // 5. Check diff (should be empty initially)
     let resp = server
@@ -60,7 +73,9 @@ async fn git_workflow() {
     let resp = server
         .client
         .put(server.url("/api/editor/files/rooms/entrance.rb?repo=alice/alice"))
-        .json(&json!({"content": "class Entrance < Room\n  title \"The Modified Entrance\"\nend\n"}))
+        .json(
+            &json!({"content": "class Entrance < Room\n  title \"The Modified Entrance\"\nend\n"}),
+        )
         .send()
         .await
         .unwrap();
@@ -75,7 +90,10 @@ async fn git_workflow() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("entrance.rb"), "diff should show modified file");
+    assert!(
+        body.contains("entrance.rb"),
+        "diff should show modified file"
+    );
 
     // 9. Commit the change
     let resp = server
@@ -96,7 +114,10 @@ async fn git_workflow() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Update entrance room"), "should see new commit");
+    assert!(
+        body.contains("Update entrance room"),
+        "should see new commit"
+    );
 
     // 11. Create a new branch
     let resp = server
@@ -119,7 +140,12 @@ async fn git_workflow() {
     assert!(body.contains("feature_quest"));
 
     // 13. Start play session and verify the modified entrance is live
-    let resp = server.client.post(server.url("/play/start")).send().await.unwrap();
+    let resp = server
+        .client
+        .post(server.url("/play/start"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
     assert!(
@@ -129,7 +155,9 @@ async fn git_workflow() {
 
     // 14. Multi-user access control: bob can't see alice's git data
     let bob = server.new_client();
-    server.register_user(&bob, "bob", "bobpass123", "Wizard").await;
+    server
+        .register_user(&bob, "bob", "bobpass123", "Wizard")
+        .await;
 
     // Note: /api/editor/files does not enforce per-user ACL yet (TODO).
     // Test git endpoint which does check ownership via Ruby portal.
@@ -138,9 +166,5 @@ async fn git_workflow() {
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        403,
-        "bob should not access alice's branches"
-    );
+    assert_eq!(resp.status(), 403, "bob should not access alice's branches");
 }

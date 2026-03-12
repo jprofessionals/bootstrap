@@ -3,8 +3,8 @@ use axum::{
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
-use hyper_util::rt::TokioIo;
 use http_body_util::BodyExt;
+use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use tokio::net::UnixStream;
 
@@ -56,9 +56,7 @@ async fn validate_portal_session(
         builder = builder.header("cookie", cookies);
     }
 
-    let req = builder
-        .body(axum::body::Body::empty())
-        .ok()?;
+    let req = builder.body(axum::body::Body::empty()).ok()?;
 
     let resp = match sender.send_request(req).await {
         Ok(r) => r,
@@ -104,10 +102,7 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let cookie_header = parts
-            .headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok());
+        let cookie_header = parts.headers.get("cookie").and_then(|v| v.to_str().ok());
 
         match validate_portal_session(&state.portal_socket, cookie_header).await {
             Some(whoami) => Ok(AuthUser {

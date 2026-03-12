@@ -54,7 +54,9 @@ impl Scanner {
         let ch = self.peek();
 
         // Number literals
-        if ch.is_ascii_digit() || (ch == '.' && self.peek_next().is_some_and(|c| c.is_ascii_digit())) {
+        if ch.is_ascii_digit()
+            || (ch == '.' && self.peek_next().is_some_and(|c| c.is_ascii_digit()))
+        {
             return self.scan_number(start, start_line, start_col);
         }
 
@@ -176,7 +178,12 @@ impl Scanner {
         Ok(())
     }
 
-    fn scan_number(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_number(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         let first = self.peek();
 
         // Leading dot: must be a float like .5
@@ -198,10 +205,11 @@ impl Scanner {
                 self.advance();
             }
             let text = self.text_from(start);
-            let value = i64::from_str_radix(&text[2..], 16).map_err(|_| LexError::InvalidNumber {
-                line: start_line,
-                col: start_col,
-            })?;
+            let value =
+                i64::from_str_radix(&text[2..], 16).map_err(|_| LexError::InvalidNumber {
+                    line: start_line,
+                    col: start_col,
+                })?;
             return Ok(Token::new(
                 TokenKind::IntLiteral(value),
                 self.make_span(start, start_line, start_col),
@@ -216,14 +224,16 @@ impl Scanner {
                 self.advance();
             }
             // Check if it becomes a float
-            if !self.is_at_end() && (self.peek() == '.' || self.peek() == 'e' || self.peek() == 'E') {
+            if !self.is_at_end() && (self.peek() == '.' || self.peek() == 'e' || self.peek() == 'E')
+            {
                 return self.continue_float(start, start_line, start_col);
             }
             let text = self.text_from(start);
-            let value = i64::from_str_radix(&text[1..], 8).map_err(|_| LexError::InvalidNumber {
-                line: start_line,
-                col: start_col,
-            })?;
+            let value =
+                i64::from_str_radix(&text[1..], 8).map_err(|_| LexError::InvalidNumber {
+                    line: start_line,
+                    col: start_col,
+                })?;
             return Ok(Token::new(
                 TokenKind::IntLiteral(value),
                 self.make_span(start, start_line, start_col),
@@ -267,7 +277,12 @@ impl Scanner {
         ))
     }
 
-    fn scan_float_from_dot(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_float_from_dot(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         self.advance(); // .
         while !self.is_at_end() && self.peek().is_ascii_digit() {
             self.advance();
@@ -301,7 +316,12 @@ impl Scanner {
     }
 
     /// Continue scanning a float after we've already consumed some integer digits.
-    fn continue_float(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn continue_float(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         if !self.is_at_end() && self.peek() == '.' {
             self.advance(); // .
             while !self.is_at_end() && self.peek().is_ascii_digit() {
@@ -381,7 +401,12 @@ impl Scanner {
         }
     }
 
-    fn scan_string(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_string(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         self.advance(); // opening "
         let mut value = String::new();
         loop {
@@ -417,7 +442,12 @@ impl Scanner {
         }
     }
 
-    fn scan_char(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_char(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         self.advance(); // opening '
         if self.is_at_end() {
             return Err(LexError::UnterminatedChar {
@@ -446,7 +476,12 @@ impl Scanner {
         ))
     }
 
-    fn scan_identifier(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_identifier(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         while !self.is_at_end() && (self.peek().is_ascii_alphanumeric() || self.peek() == '_') {
             self.advance();
         }
@@ -463,12 +498,27 @@ impl Scanner {
         ))
     }
 
-    fn emit(&self, kind: TokenKind, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn emit(
+        &self,
+        kind: TokenKind,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         let text = self.text_from(start);
-        Ok(Token::new(kind, self.make_span(start, start_line, start_col), text))
+        Ok(Token::new(
+            kind,
+            self.make_span(start, start_line, start_col),
+            text,
+        ))
     }
 
-    fn scan_operator(&mut self, start: usize, start_line: u32, start_col: u32) -> Result<Token, LexError> {
+    fn scan_operator(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
         let ch = self.advance();
 
         match ch {
@@ -498,8 +548,14 @@ impl Scanner {
             '+' => {
                 if !self.is_at_end() {
                     match self.peek() {
-                        '+' => { self.advance(); return self.emit(TokenKind::PlusPlus, start, start_line, start_col); }
-                        '=' => { self.advance(); return self.emit(TokenKind::PlusAssign, start, start_line, start_col); }
+                        '+' => {
+                            self.advance();
+                            return self.emit(TokenKind::PlusPlus, start, start_line, start_col);
+                        }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::PlusAssign, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }
@@ -509,9 +565,18 @@ impl Scanner {
             '-' => {
                 if !self.is_at_end() {
                     match self.peek() {
-                        '-' => { self.advance(); return self.emit(TokenKind::MinusMinus, start, start_line, start_col); }
-                        '>' => { self.advance(); return self.emit(TokenKind::Arrow, start, start_line, start_col); }
-                        '=' => { self.advance(); return self.emit(TokenKind::MinusAssign, start, start_line, start_col); }
+                        '-' => {
+                            self.advance();
+                            return self.emit(TokenKind::MinusMinus, start, start_line, start_col);
+                        }
+                        '>' => {
+                            self.advance();
+                            return self.emit(TokenKind::Arrow, start, start_line, start_col);
+                        }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::MinusAssign, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }
@@ -545,8 +610,14 @@ impl Scanner {
             '&' => {
                 if !self.is_at_end() {
                     match self.peek() {
-                        '&' => { self.advance(); return self.emit(TokenKind::AndAnd, start, start_line, start_col); }
-                        '=' => { self.advance(); return self.emit(TokenKind::AmpAssign, start, start_line, start_col); }
+                        '&' => {
+                            self.advance();
+                            return self.emit(TokenKind::AndAnd, start, start_line, start_col);
+                        }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::AmpAssign, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }
@@ -556,8 +627,14 @@ impl Scanner {
             '|' => {
                 if !self.is_at_end() {
                     match self.peek() {
-                        '|' => { self.advance(); return self.emit(TokenKind::OrOr, start, start_line, start_col); }
-                        '=' => { self.advance(); return self.emit(TokenKind::PipeAssign, start, start_line, start_col); }
+                        '|' => {
+                            self.advance();
+                            return self.emit(TokenKind::OrOr, start, start_line, start_col);
+                        }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::PipeAssign, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }
@@ -595,11 +672,19 @@ impl Scanner {
                             self.advance();
                             if !self.is_at_end() && self.peek() == '=' {
                                 self.advance();
-                                return self.emit(TokenKind::ShlAssign, start, start_line, start_col);
+                                return self.emit(
+                                    TokenKind::ShlAssign,
+                                    start,
+                                    start_line,
+                                    start_col,
+                                );
                             }
                             return self.emit(TokenKind::ShiftLeft, start, start_line, start_col);
                         }
-                        '=' => { self.advance(); return self.emit(TokenKind::LessEq, start, start_line, start_col); }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::LessEq, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }
@@ -613,11 +698,19 @@ impl Scanner {
                             self.advance();
                             if !self.is_at_end() && self.peek() == '=' {
                                 self.advance();
-                                return self.emit(TokenKind::ShrAssign, start, start_line, start_col);
+                                return self.emit(
+                                    TokenKind::ShrAssign,
+                                    start,
+                                    start_line,
+                                    start_col,
+                                );
                             }
                             return self.emit(TokenKind::ShiftRight, start, start_line, start_col);
                         }
-                        '=' => { self.advance(); return self.emit(TokenKind::GreaterEq, start, start_line, start_col); }
+                        '=' => {
+                            self.advance();
+                            return self.emit(TokenKind::GreaterEq, start, start_line, start_col);
+                        }
                         _ => {}
                     }
                 }

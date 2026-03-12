@@ -1,6 +1,7 @@
 # Only send what Dockerfile.e2e needs to Docker daemon
 target/
 !target/x86_64-unknown-linux-musl/release/mud-driver
+!target/x86_64-unknown-linux-musl/release/mud-adapter-lpc
 crates/
 docs/
 data/

@@ -21,8 +21,8 @@ use tower::ServiceExt;
 use mud_driver::git::repo_manager::{AccessLevel, RepoManager};
 use mud_driver::git::workspace::Workspace;
 use mud_driver::persistence::player_store::PlayerStore;
-use mud_driver::web::git_http::git_http_routes;
 use mud_driver::web::build_log::BuildLog;
+use mud_driver::web::git_http::git_http_routes;
 use mud_driver::web::server::AppState;
 
 // ---------------------------------------------------------------------------
@@ -114,10 +114,7 @@ async fn build_harness() -> TestHarness {
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )",
     ] {
-        sqlx::query(sql)
-            .execute(&pool)
-            .await
-            .expect("create table");
+        sqlx::query(sql).execute(&pool).await.expect("create table");
     }
 
     let player_store = Arc::new(PlayerStore::new(pool));

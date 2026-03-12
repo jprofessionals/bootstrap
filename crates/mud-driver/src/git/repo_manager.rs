@@ -45,7 +45,9 @@ impl RepoManager {
 
     /// Path to ACL file: `base_path/ns/name.git.acl.yml`
     fn acl_path(&self, ns: &str, name: &str) -> PathBuf {
-        self.base_path.join(ns).join(format!("{}.git.acl.yml", name))
+        self.base_path
+            .join(ns)
+            .join(format!("{}.git.acl.yml", name))
     }
 
     /// Create a bare git repo with initial commit and both `main` + `develop` branches.
@@ -175,10 +177,7 @@ impl RepoManager {
     /// Minimal default template used when no adapter-provided template is available.
     fn default_template_files() -> HashMap<String, String> {
         let mut files = HashMap::new();
-        files.insert(
-            ".meta.yml".into(),
-            "owner: {{namespace}}\n".into(),
-        );
+        files.insert(".meta.yml".into(), "owner: {{namespace}}\n".into());
         files.insert(
             "mud_aliases.rb".into(),
             concat!(
@@ -424,7 +423,8 @@ mod tests {
     fn test_create_repo_unseeded() {
         let (_dir, mgr) = setup();
 
-        mgr.create_repo("testns", "empty_area", false, None).unwrap();
+        mgr.create_repo("testns", "empty_area", false, None)
+            .unwrap();
         assert!(mgr.repo_exists("testns", "empty_area"));
 
         // Verify it's a valid bare repo
@@ -443,12 +443,7 @@ mod tests {
         mgr.create_repo("testns", "village", true, None).unwrap();
         let result = mgr.create_repo("testns", "village", true, None);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("already exists")
-        );
+        assert!(result.unwrap_err().to_string().contains("already exists"));
     }
 
     #[test]

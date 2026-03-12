@@ -7,8 +7,8 @@
 //! All 13 DGD ASN kfuns: add, sub, mult, div, mod, pow, modinv, lshift,
 //! rshift, and, or, xor, cmp.
 
+use super::{require_int, require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_int, require_string};
 
 // ---------------------------------------------------------------------------
 // Internal big-integer representation: sign + magnitude (big-endian, no
@@ -254,11 +254,7 @@ fn mag_divmod_short(a: &[u8], b: u8) -> (Vec<u8>, Vec<u8>) {
     }
 
     strip_leading_zeros(&mut quotient);
-    let remainder = if rem == 0 {
-        vec![]
-    } else {
-        vec![rem as u8]
-    };
+    let remainder = if rem == 0 { vec![] } else { vec![rem as u8] };
     (quotient, remainder)
 }
 
@@ -386,12 +382,7 @@ fn mag_shr_bits(a: &[u8], n: usize) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// Add two signed numbers.
-fn signed_add(
-    a_neg: bool,
-    a_mag: &[u8],
-    b_neg: bool,
-    b_mag: &[u8],
-) -> (bool, Vec<u8>) {
+fn signed_add(a_neg: bool, a_mag: &[u8], b_neg: bool, b_mag: &[u8]) -> (bool, Vec<u8>) {
     if a_neg == b_neg {
         // Same sign: add magnitudes, keep sign.
         (a_neg, mag_add(a_mag, b_mag))
@@ -419,22 +410,12 @@ fn signed_add(
 }
 
 /// Subtract: a - b = a + (-b).
-fn signed_sub(
-    a_neg: bool,
-    a_mag: &[u8],
-    b_neg: bool,
-    b_mag: &[u8],
-) -> (bool, Vec<u8>) {
+fn signed_sub(a_neg: bool, a_mag: &[u8], b_neg: bool, b_mag: &[u8]) -> (bool, Vec<u8>) {
     signed_add(a_neg, a_mag, !b_neg, b_mag)
 }
 
 /// Multiply two signed numbers.
-fn signed_mul(
-    a_neg: bool,
-    a_mag: &[u8],
-    b_neg: bool,
-    b_mag: &[u8],
-) -> (bool, Vec<u8>) {
+fn signed_mul(a_neg: bool, a_mag: &[u8], b_neg: bool, b_mag: &[u8]) -> (bool, Vec<u8>) {
     let mag = mag_mul(a_mag, b_mag);
     if is_zero(&mag) {
         (false, vec![])
@@ -459,12 +440,7 @@ fn signed_divmod(
 
 /// Euclidean modulo: result has the same sign convention as the modulus in DGD.
 /// DGD's ASN mod returns a non-negative result when the modulus is positive.
-fn signed_mod(
-    a_neg: bool,
-    a_mag: &[u8],
-    b_neg: bool,
-    b_mag: &[u8],
-) -> (bool, Vec<u8>) {
+fn signed_mod(a_neg: bool, a_mag: &[u8], b_neg: bool, b_mag: &[u8]) -> (bool, Vec<u8>) {
     let (_q_neg, _q, r_neg, r) = signed_divmod(a_neg, a_mag, b_neg, b_mag);
     if is_zero(&r) {
         return (false, vec![]);
@@ -494,9 +470,7 @@ fn mod_pow(
     }
 
     if exp_neg {
-        return Err(LpcError::ValueError(
-            "asn_pow: negative exponent".into(),
-        ));
+        return Err(LpcError::ValueError("asn_pow: negative exponent".into()));
     }
 
     if is_zero(exp_mag) {
@@ -540,12 +514,7 @@ fn mod_pow(
 }
 
 /// Reduce a signed value modulo m, giving a non-negative result when m > 0.
-fn reduce_mod(
-    a_neg: bool,
-    a_mag: &[u8],
-    _m_neg: bool,
-    m_mag: &[u8],
-) -> (bool, Vec<u8>) {
+fn reduce_mod(a_neg: bool, a_mag: &[u8], _m_neg: bool, m_mag: &[u8]) -> (bool, Vec<u8>) {
     if is_zero(a_mag) {
         return (false, vec![]);
     }
@@ -571,9 +540,7 @@ fn mod_inverse(
     m_mag: &[u8],
 ) -> Result<(bool, Vec<u8>), LpcError> {
     if is_zero(m_mag) {
-        return Err(LpcError::ValueError(
-            "asn_modinv: zero modulus".into(),
-        ));
+        return Err(LpcError::ValueError("asn_modinv: zero modulus".into()));
     }
     if is_zero(a_mag) {
         return Err(LpcError::ValueError(
@@ -633,8 +600,24 @@ fn mod_inverse(
 /// Perform a bitwise operation on two's complement byte strings.
 /// The operation is applied byte-by-byte after sign-extending to equal length.
 fn bitwise_op(a: &[u8], b: &[u8], op: fn(u8, u8) -> u8) -> Vec<u8> {
-    let a_sign = if a.is_empty() { 0x00 } else { if a[0] & 0x80 != 0 { 0xFF } else { 0x00 } };
-    let b_sign = if b.is_empty() { 0x00 } else { if b[0] & 0x80 != 0 { 0xFF } else { 0x00 } };
+    let a_sign = if a.is_empty() {
+        0x00
+    } else {
+        if a[0] & 0x80 != 0 {
+            0xFF
+        } else {
+            0x00
+        }
+    };
+    let b_sign = if b.is_empty() {
+        0x00
+    } else {
+        if b[0] & 0x80 != 0 {
+            0xFF
+        } else {
+            0x00
+        }
+    };
 
     // Use the raw two's complement representations, not magnitude.
     let a_bytes = if a.is_empty() { &[0u8][..] } else { a };
@@ -665,7 +648,10 @@ fn bitwise_op(a: &[u8], b: &[u8], op: fn(u8, u8) -> u8) -> Vec<u8> {
     };
 
     // Strip redundant leading sign bytes
-    while result.len() > 1 && result[0] == result_sign && (result[1] & 0x80 != 0) == (result_sign == 0xFF) {
+    while result.len() > 1
+        && result[0] == result_sign
+        && (result[1] & 0x80 != 0) == (result_sign == 0xFF)
+    {
         result.remove(0);
     }
 
@@ -889,7 +875,10 @@ pub fn kf_asn_lshift(ctx: &mut KfunContext, args: &[LpcValue]) -> Result<LpcValu
     let b1 = lpc_string_to_bytes(s1);
     let b3 = lpc_string_to_bytes(s3);
 
-    charge_ticks(ctx, &[b1.len(), b3.len(), nbits.unsigned_abs() as usize / 8]);
+    charge_ticks(
+        ctx,
+        &[b1.len(), b3.len(), nbits.unsigned_abs() as usize / 8],
+    );
 
     if nbits < 0 {
         return Err(LpcError::ValueError(

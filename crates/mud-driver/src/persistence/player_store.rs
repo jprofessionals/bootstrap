@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 
 // ---------------------------------------------------------------------------
@@ -198,13 +198,12 @@ impl PlayerStore {
 
     /// Switch the active character for the given player.
     pub async fn switch_character(&self, player_id: &str, character_name: &str) -> Result<()> {
-        let result =
-            sqlx::query("UPDATE players SET active_character = $1 WHERE id = $2")
-                .bind(character_name)
-                .bind(player_id)
-                .execute(&self.pool)
-                .await
-                .context("switching character")?;
+        let result = sqlx::query("UPDATE players SET active_character = $1 WHERE id = $2")
+            .bind(character_name)
+            .bind(player_id)
+            .execute(&self.pool)
+            .await
+            .context("switching character")?;
 
         if result.rows_affected() == 0 {
             bail!("player '{}' not found", player_id);
@@ -216,11 +215,7 @@ impl PlayerStore {
     ///
     /// Only allowed if the player's role is not `"player"` (i.e. they must
     /// be a builder, admin, or other privileged role).
-    pub async fn set_builder_character(
-        &self,
-        player_id: &str,
-        character_id: i32,
-    ) -> Result<()> {
+    pub async fn set_builder_character(&self, player_id: &str, character_id: i32) -> Result<()> {
         let role = self
             .account_role(player_id)
             .await?
@@ -233,14 +228,12 @@ impl PlayerStore {
             );
         }
 
-        let result = sqlx::query(
-            "UPDATE players SET builder_character_id = $1 WHERE id = $2",
-        )
-        .bind(character_id)
-        .bind(player_id)
-        .execute(&self.pool)
-        .await
-        .context("setting builder character")?;
+        let result = sqlx::query("UPDATE players SET builder_character_id = $1 WHERE id = $2")
+            .bind(character_id)
+            .bind(player_id)
+            .execute(&self.pool)
+            .await
+            .context("setting builder character")?;
 
         if result.rows_affected() == 0 {
             bail!("player '{}' not found", player_id);
@@ -287,11 +280,7 @@ impl PlayerStore {
     ///
     /// Fetches all tokens for the player and tries `bcrypt::verify` against
     /// each one. Updates `last_used_at` on the matching token.
-    pub async fn authenticate_token(
-        &self,
-        player_id: &str,
-        token: &str,
-    ) -> Result<AuthResult> {
+    pub async fn authenticate_token(&self, player_id: &str, token: &str) -> Result<AuthResult> {
         // Check player exists first.
         let player = match self.find(player_id).await? {
             Some(p) => p,
@@ -299,7 +288,8 @@ impl PlayerStore {
         };
 
         // Extract the prefix from the token to narrow the search.
-        let prefix = token.strip_prefix("mud_")
+        let prefix = token
+            .strip_prefix("mud_")
             .and_then(|hex_part| hex_part.get(..8))
             .unwrap_or("");
 
@@ -336,10 +326,7 @@ impl PlayerStore {
     }
 
     /// List all access tokens for the given player (without hashes).
-    pub async fn list_access_tokens(
-        &self,
-        player_id: &str,
-    ) -> Result<Vec<TokenRecord>> {
+    pub async fn list_access_tokens(&self, player_id: &str) -> Result<Vec<TokenRecord>> {
         let rows = sqlx::query(
             "SELECT id, name, token_prefix, created_at, last_used_at \
              FROM access_tokens WHERE player_id = $1 \
@@ -363,19 +350,13 @@ impl PlayerStore {
     }
 
     /// Revoke (delete) an access token by id, scoped to the given player.
-    pub async fn revoke_access_token(
-        &self,
-        player_id: &str,
-        token_id: i32,
-    ) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM access_tokens WHERE id = $1 AND player_id = $2",
-        )
-        .bind(token_id)
-        .bind(player_id)
-        .execute(&self.pool)
-        .await
-        .context("revoking access token")?;
+    pub async fn revoke_access_token(&self, player_id: &str, token_id: i32) -> Result<()> {
+        sqlx::query("DELETE FROM access_tokens WHERE id = $1 AND player_id = $2")
+            .bind(token_id)
+            .bind(player_id)
+            .execute(&self.pool)
+            .await
+            .context("revoking access token")?;
         Ok(())
     }
 

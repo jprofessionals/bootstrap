@@ -10,8 +10,8 @@
 //! - mapping -> ([key:val,key:val,...])
 //! - object -> <path>
 
-use crate::bytecode::LpcValue;
 use super::{KfunContext, LpcError};
+use crate::bytecode::LpcValue;
 
 /// save_object(string path) -> void
 ///
@@ -32,10 +32,7 @@ pub fn kf_save_object(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcV
 ///
 /// TODO: Full implementation requires VM variable access and driver services
 /// for file I/O.
-pub fn kf_restore_object(
-    _ctx: &mut KfunContext,
-    _args: &[LpcValue],
-) -> Result<LpcValue, LpcError> {
+pub fn kf_restore_object(_ctx: &mut KfunContext, _args: &[LpcValue]) -> Result<LpcValue, LpcError> {
     // TODO: Requires VM variable access + driver services for file I/O
     Err(LpcError::RuntimeError(
         "restore_object: driver services not yet connected".into(),
@@ -164,16 +161,17 @@ pub fn parse_value(input: &str) -> Result<(LpcValue, &str), LpcError> {
                 &input[end + 1..],
             ));
         }
-        return Err(LpcError::ValueError(
-            "unterminated object reference".into(),
-        ));
+        return Err(LpcError::ValueError("unterminated object reference".into()));
     }
 
     // Float (contains a dot)
     // Int (digits, possibly with leading sign)
     if input.starts_with('-')
         || input.starts_with('+')
-        || input.as_bytes().first().map_or(false, |b| b.is_ascii_digit())
+        || input
+            .as_bytes()
+            .first()
+            .map_or(false, |b| b.is_ascii_digit())
     {
         // Find end of number
         let mut end = 0;
@@ -282,9 +280,7 @@ fn parse_array_value(input: &str) -> Result<(LpcValue, &str), LpcError> {
         if rest.starts_with(',') {
             rest = &rest[1..];
         } else {
-            return Err(LpcError::ValueError(
-                "expected ',' or '})' in array".into(),
-            ));
+            return Err(LpcError::ValueError("expected ',' or '})' in array".into()));
         }
     }
 }
@@ -304,9 +300,7 @@ fn parse_mapping_value(input: &str) -> Result<(LpcValue, &str), LpcError> {
         rest = remaining.trim_start();
 
         if !rest.starts_with(':') {
-            return Err(LpcError::ValueError(
-                "expected ':' in mapping".into(),
-            ));
+            return Err(LpcError::ValueError("expected ':' in mapping".into()));
         }
         rest = &rest[1..];
 

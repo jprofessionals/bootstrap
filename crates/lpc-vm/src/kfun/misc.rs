@@ -1,7 +1,7 @@
 //! Miscellaneous kfuns: error, call_trace, status, dump_state, shutdown, swapout.
 
+use super::{require_string, KfunContext, LpcError};
 use crate::bytecode::LpcValue;
-use super::{KfunContext, LpcError, require_string};
 
 /// error(string msg) -> void
 ///

@@ -9,6 +9,9 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/mud-mop/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mud-e2e/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mud-e2e/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/adapters/lpc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/lpc-vm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/lpc-vm/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

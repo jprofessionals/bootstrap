@@ -132,11 +132,14 @@ impl russh::server::Handler for SshHandler {
 
         // Send NewSession notification to the server orchestrator.
         let username = self.username.clone().unwrap_or_else(|| "anonymous".into());
-        let _ = self.command_tx.send(SshCommand::NewSession {
-            username,
-            output_tx,
-            session_id_tx,
-        }).await;
+        let _ = self
+            .command_tx
+            .send(SshCommand::NewSession {
+                username,
+                output_tx,
+                session_id_tx,
+            })
+            .await;
 
         // Wait for the server to assign us a session ID.
         if let Ok(id) = session_id_rx.await {
@@ -187,10 +190,10 @@ impl russh::server::Handler for SshHandler {
 
                     let line = std::mem::take(buf);
                     if let Some(session_id) = self.session_id {
-                        let _ = self.command_tx.send(SshCommand::Input {
-                            session_id,
-                            line,
-                        }).await;
+                        let _ = self
+                            .command_tx
+                            .send(SshCommand::Input { session_id, line })
+                            .await;
                     }
 
                     // No prompt here — the adapter sends the prompt as
@@ -209,9 +212,10 @@ impl russh::server::Handler for SshHandler {
                 // Ctrl-C — disconnect
                 0x03 => {
                     if let Some(session_id) = self.session_id {
-                        let _ = self.command_tx.send(SshCommand::Disconnect {
-                            session_id,
-                        }).await;
+                        let _ = self
+                            .command_tx
+                            .send(SshCommand::Disconnect { session_id })
+                            .await;
                     }
                     return Err(russh::Error::Disconnect);
                 }
@@ -238,9 +242,10 @@ impl russh::server::Handler for SshHandler {
     ) -> Result<(), Self::Error> {
         self.line_buffer.remove(&channel);
         if let Some(session_id) = self.session_id {
-            let _ = self.command_tx.send(SshCommand::Disconnect {
-                session_id,
-            }).await;
+            let _ = self
+                .command_tx
+                .send(SshCommand::Disconnect { session_id })
+                .await;
         }
         Ok(())
     }

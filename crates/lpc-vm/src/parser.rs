@@ -345,7 +345,11 @@ impl Parser {
         // Skip modifiers
         loop {
             match self.peek_kind(offset) {
-                TokenKind::Private | TokenKind::Static | TokenKind::Nomask | TokenKind::Atomic | TokenKind::Varargs => {
+                TokenKind::Private
+                | TokenKind::Static
+                | TokenKind::Nomask
+                | TokenKind::Atomic
+                | TokenKind::Varargs => {
                     offset += 1;
                 }
                 _ => break,
@@ -716,16 +720,36 @@ impl Parser {
 
             // Assignment (right-associative)
             TokenKind::Assign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::Assign))),
-            TokenKind::PlusAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::AddAssign))),
-            TokenKind::MinusAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::SubAssign))),
-            TokenKind::StarAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::MulAssign))),
-            TokenKind::SlashAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::DivAssign))),
-            TokenKind::PercentAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ModAssign))),
-            TokenKind::AmpAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::AndAssign))),
-            TokenKind::PipeAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::OrAssign))),
-            TokenKind::CaretAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::XorAssign))),
-            TokenKind::ShlAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ShlAssign))),
-            TokenKind::ShrAssign => Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ShrAssign))),
+            TokenKind::PlusAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::AddAssign)))
+            }
+            TokenKind::MinusAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::SubAssign)))
+            }
+            TokenKind::StarAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::MulAssign)))
+            }
+            TokenKind::SlashAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::DivAssign)))
+            }
+            TokenKind::PercentAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ModAssign)))
+            }
+            TokenKind::AmpAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::AndAssign)))
+            }
+            TokenKind::PipeAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::OrAssign)))
+            }
+            TokenKind::CaretAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::XorAssign)))
+            }
+            TokenKind::ShlAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ShlAssign)))
+            }
+            TokenKind::ShrAssign => {
+                Some((BP_ASSIGN, BP_ASSIGN, InfixKind::Assign(AssignOp::ShrAssign)))
+            }
 
             // Ternary (right-associative)
             TokenKind::Question => Some((BP_TERNARY, BP_TERNARY, InfixKind::Ternary)),
@@ -737,36 +761,100 @@ impl Parser {
             TokenKind::AndAnd => Some((BP_AND, Bp(BP_AND.0 + 1), InfixKind::Binary(BinaryOp::And))),
 
             // Bitwise OR
-            TokenKind::Pipe => Some((BP_BIT_OR, Bp(BP_BIT_OR.0 + 1), InfixKind::Binary(BinaryOp::BitOr))),
+            TokenKind::Pipe => Some((
+                BP_BIT_OR,
+                Bp(BP_BIT_OR.0 + 1),
+                InfixKind::Binary(BinaryOp::BitOr),
+            )),
 
             // Bitwise XOR
-            TokenKind::Caret => Some((BP_BIT_XOR, Bp(BP_BIT_XOR.0 + 1), InfixKind::Binary(BinaryOp::BitXor))),
+            TokenKind::Caret => Some((
+                BP_BIT_XOR,
+                Bp(BP_BIT_XOR.0 + 1),
+                InfixKind::Binary(BinaryOp::BitXor),
+            )),
 
             // Bitwise AND
-            TokenKind::Ampersand => Some((BP_BIT_AND, Bp(BP_BIT_AND.0 + 1), InfixKind::Binary(BinaryOp::BitAnd))),
+            TokenKind::Ampersand => Some((
+                BP_BIT_AND,
+                Bp(BP_BIT_AND.0 + 1),
+                InfixKind::Binary(BinaryOp::BitAnd),
+            )),
 
             // Equality
-            TokenKind::EqEq => Some((BP_EQUALITY, Bp(BP_EQUALITY.0 + 1), InfixKind::Binary(BinaryOp::Eq))),
-            TokenKind::NotEq => Some((BP_EQUALITY, Bp(BP_EQUALITY.0 + 1), InfixKind::Binary(BinaryOp::NotEq))),
+            TokenKind::EqEq => Some((
+                BP_EQUALITY,
+                Bp(BP_EQUALITY.0 + 1),
+                InfixKind::Binary(BinaryOp::Eq),
+            )),
+            TokenKind::NotEq => Some((
+                BP_EQUALITY,
+                Bp(BP_EQUALITY.0 + 1),
+                InfixKind::Binary(BinaryOp::NotEq),
+            )),
 
             // Relational
-            TokenKind::Less => Some((BP_RELATIONAL, Bp(BP_RELATIONAL.0 + 1), InfixKind::Binary(BinaryOp::Less))),
-            TokenKind::LessEq => Some((BP_RELATIONAL, Bp(BP_RELATIONAL.0 + 1), InfixKind::Binary(BinaryOp::LessEq))),
-            TokenKind::Greater => Some((BP_RELATIONAL, Bp(BP_RELATIONAL.0 + 1), InfixKind::Binary(BinaryOp::Greater))),
-            TokenKind::GreaterEq => Some((BP_RELATIONAL, Bp(BP_RELATIONAL.0 + 1), InfixKind::Binary(BinaryOp::GreaterEq))),
+            TokenKind::Less => Some((
+                BP_RELATIONAL,
+                Bp(BP_RELATIONAL.0 + 1),
+                InfixKind::Binary(BinaryOp::Less),
+            )),
+            TokenKind::LessEq => Some((
+                BP_RELATIONAL,
+                Bp(BP_RELATIONAL.0 + 1),
+                InfixKind::Binary(BinaryOp::LessEq),
+            )),
+            TokenKind::Greater => Some((
+                BP_RELATIONAL,
+                Bp(BP_RELATIONAL.0 + 1),
+                InfixKind::Binary(BinaryOp::Greater),
+            )),
+            TokenKind::GreaterEq => Some((
+                BP_RELATIONAL,
+                Bp(BP_RELATIONAL.0 + 1),
+                InfixKind::Binary(BinaryOp::GreaterEq),
+            )),
 
             // Shift
-            TokenKind::ShiftLeft => Some((BP_SHIFT, Bp(BP_SHIFT.0 + 1), InfixKind::Binary(BinaryOp::ShiftLeft))),
-            TokenKind::ShiftRight => Some((BP_SHIFT, Bp(BP_SHIFT.0 + 1), InfixKind::Binary(BinaryOp::ShiftRight))),
+            TokenKind::ShiftLeft => Some((
+                BP_SHIFT,
+                Bp(BP_SHIFT.0 + 1),
+                InfixKind::Binary(BinaryOp::ShiftLeft),
+            )),
+            TokenKind::ShiftRight => Some((
+                BP_SHIFT,
+                Bp(BP_SHIFT.0 + 1),
+                InfixKind::Binary(BinaryOp::ShiftRight),
+            )),
 
             // Additive
-            TokenKind::Plus => Some((BP_ADDITIVE, Bp(BP_ADDITIVE.0 + 1), InfixKind::Binary(BinaryOp::Add))),
-            TokenKind::Minus => Some((BP_ADDITIVE, Bp(BP_ADDITIVE.0 + 1), InfixKind::Binary(BinaryOp::Sub))),
+            TokenKind::Plus => Some((
+                BP_ADDITIVE,
+                Bp(BP_ADDITIVE.0 + 1),
+                InfixKind::Binary(BinaryOp::Add),
+            )),
+            TokenKind::Minus => Some((
+                BP_ADDITIVE,
+                Bp(BP_ADDITIVE.0 + 1),
+                InfixKind::Binary(BinaryOp::Sub),
+            )),
 
             // Multiplicative
-            TokenKind::Star => Some((BP_MULTIPLICATIVE, Bp(BP_MULTIPLICATIVE.0 + 1), InfixKind::Binary(BinaryOp::Mul))),
-            TokenKind::Slash => Some((BP_MULTIPLICATIVE, Bp(BP_MULTIPLICATIVE.0 + 1), InfixKind::Binary(BinaryOp::Div))),
-            TokenKind::Percent => Some((BP_MULTIPLICATIVE, Bp(BP_MULTIPLICATIVE.0 + 1), InfixKind::Binary(BinaryOp::Mod))),
+            TokenKind::Star => Some((
+                BP_MULTIPLICATIVE,
+                Bp(BP_MULTIPLICATIVE.0 + 1),
+                InfixKind::Binary(BinaryOp::Mul),
+            )),
+            TokenKind::Slash => Some((
+                BP_MULTIPLICATIVE,
+                Bp(BP_MULTIPLICATIVE.0 + 1),
+                InfixKind::Binary(BinaryOp::Div),
+            )),
+            TokenKind::Percent => Some((
+                BP_MULTIPLICATIVE,
+                Bp(BP_MULTIPLICATIVE.0 + 1),
+                InfixKind::Binary(BinaryOp::Mod),
+            )),
 
             _ => None,
         }

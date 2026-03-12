@@ -69,8 +69,16 @@ struct ErrorBody {
 /// Build the router for editor file CRUD endpoints.
 ///
 /// Intended to be nested at `/api/editor` in the main application.
-pub fn editor_file_routes(world_path: PathBuf, mop_rpc: Option<MopRpcClient>, portal_socket: String) -> Router {
-    let state = EditorState { world_path, mop_rpc, portal_socket };
+pub fn editor_file_routes(
+    world_path: PathBuf,
+    mop_rpc: Option<MopRpcClient>,
+    portal_socket: String,
+) -> Router {
+    let state = EditorState {
+        world_path,
+        mop_rpc,
+        portal_socket,
+    };
 
     Router::new()
         .route("/files", get(list_files_handler))
@@ -125,7 +133,10 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
         || rel_path.contains("/.git/")
         || rel_path.contains("/.git")
     {
-        return Err(error_response(StatusCode::FORBIDDEN, "access to .git is forbidden"));
+        return Err(error_response(
+            StatusCode::FORBIDDEN,
+            "access to .git is forbidden",
+        ));
     }
 
     // Build the candidate path and canonicalize to catch traversal.
@@ -134,27 +145,33 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
 
     // Use the canonical workspace path for the starts_with check.
     let canonical_workspace = workspace.canonicalize().map_err(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "workspace canonicalize failed")
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "workspace canonicalize failed",
+        )
     })?;
 
     // For existing paths we canonicalize; for new paths we canonicalize the
     // parent and append the file name.
     let canonical = if candidate.exists() {
         candidate.canonicalize().map_err(|_| {
-            error_response(StatusCode::INTERNAL_SERVER_ERROR, "path canonicalize failed")
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "path canonicalize failed",
+            )
         })?
     } else {
         // Parent must exist (or we create it).
-        let parent = candidate.parent().ok_or_else(|| {
-            error_response(StatusCode::BAD_REQUEST, "invalid path")
-        })?;
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "invalid path"))?;
         if parent.exists() {
-            let canonical_parent = parent.canonicalize().map_err(|_| {
-                error_response(StatusCode::BAD_REQUEST, "invalid parent path")
-            })?;
-            let file_name = candidate.file_name().ok_or_else(|| {
-                error_response(StatusCode::BAD_REQUEST, "invalid file name")
-            })?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|_| error_response(StatusCode::BAD_REQUEST, "invalid parent path"))?;
+            let file_name = candidate
+                .file_name()
+                .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "invalid file name"))?;
             canonical_parent.join(file_name)
         } else {
             // For deeply nested new files, walk up to find an existing ancestor.
@@ -171,9 +188,9 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
                     .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "invalid path"))?
                     .to_path_buf();
             }
-            let mut resolved = existing.canonicalize().map_err(|_| {
-                error_response(StatusCode::BAD_REQUEST, "invalid path")
-            })?;
+            let mut resolved = existing
+                .canonicalize()
+                .map_err(|_| error_response(StatusCode::BAD_REQUEST, "invalid path"))?;
             for part in tail_parts.into_iter().rev() {
                 resolved.push(part);
             }
@@ -185,7 +202,10 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
     };
 
     if !canonical.starts_with(&canonical_workspace) {
-        return Err(error_response(StatusCode::FORBIDDEN, "path traversal denied"));
+        return Err(error_response(
+            StatusCode::FORBIDDEN,
+            "path traversal denied",
+        ));
     }
 
     Ok(canonical)
@@ -198,7 +218,10 @@ fn resolve_file_path(workspace: &Path, rel_path: &str) -> Result<PathBuf, Respon
 /// Validate the session cookie by calling the Ruby portal's `/account/api/whoami`
 /// endpoint via the Unix domain socket. Returns `Ok(())` if the user has builder
 /// (or admin) access, or an error response otherwise.
-async fn validate_builder_session(portal_socket: &str, cookie_header: Option<&str>) -> Result<(), Response> {
+async fn validate_builder_session(
+    portal_socket: &str,
+    cookie_header: Option<&str>,
+) -> Result<(), Response> {
     // Skip auth when no portal socket is configured (e.g. in unit tests).
     if portal_socket.is_empty() {
         return Ok(());
@@ -206,16 +229,28 @@ async fn validate_builder_session(portal_socket: &str, cookie_header: Option<&st
 
     let stream = match tokio::net::UnixStream::connect(portal_socket).await {
         Ok(s) => s,
-        Err(_) => return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required")),
+        Err(_) => {
+            return Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "authentication required",
+            ))
+        }
     };
     let io = hyper_util::rt::TokioIo::new(stream);
 
     let (mut sender, conn) = match hyper::client::conn::http1::handshake(io).await {
         Ok(parts) => parts,
-        Err(_) => return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required")),
+        Err(_) => {
+            return Err(error_response(
+                StatusCode::UNAUTHORIZED,
+                "authentication required",
+            ))
+        }
     };
 
-    tokio::spawn(async move { let _ = conn.await; });
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
 
     let mut builder = hyper::Request::builder()
         .method("GET")
@@ -226,30 +261,44 @@ async fn validate_builder_session(portal_socket: &str, cookie_header: Option<&st
         builder = builder.header("cookie", cookies);
     }
 
-    let req = builder.body(axum::body::Body::empty())
+    let req = builder
+        .body(axum::body::Body::empty())
         .map_err(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "request build failed"))?;
 
-    let resp = sender.send_request(req).await
+    let resp = sender
+        .send_request(req)
+        .await
         .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?;
 
     if resp.status() != hyper::StatusCode::OK {
-        return Err(error_response(StatusCode::UNAUTHORIZED, "authentication required"));
+        return Err(error_response(
+            StatusCode::UNAUTHORIZED,
+            "authentication required",
+        ));
     }
 
     // Check if user has builder role
     use http_body_util::BodyExt;
-    let body = resp.into_body().collect().await
+    let body = resp
+        .into_body()
+        .collect()
+        .await
         .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?
         .to_bytes();
 
     #[derive(serde::Deserialize)]
-    struct WhoamiResp { role: String }
+    struct WhoamiResp {
+        role: String,
+    }
 
     let whoami: WhoamiResp = serde_json::from_slice(&body)
         .map_err(|_| error_response(StatusCode::UNAUTHORIZED, "authentication required"))?;
 
     if whoami.role == "player" {
-        return Err(error_response(StatusCode::FORBIDDEN, "builder access required"));
+        return Err(error_response(
+            StatusCode::FORBIDDEN,
+            "builder access required",
+        ));
     }
 
     Ok(())
@@ -287,11 +336,7 @@ async fn list_files_handler(
 }
 
 /// Recursively collect files, excluding `.git/`.
-fn collect_files(
-    base: &Path,
-    dir: &Path,
-    out: &mut Vec<String>,
-) -> std::io::Result<()> {
+fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -436,7 +481,11 @@ async fn create_file_handler(
     }
 
     match std::fs::write(&file_path, &body.content) {
-        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" }))).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "status": "created" })),
+        )
+            .into_response(),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("write failed: {}", e),
@@ -483,5 +532,11 @@ async fn delete_file_handler(
 // ---------------------------------------------------------------------------
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    (status, Json(ErrorBody { error: message.into() })).into_response()
+    (
+        status,
+        Json(ErrorBody {
+            error: message.into(),
+        }),
+    )
+        .into_response()
 }

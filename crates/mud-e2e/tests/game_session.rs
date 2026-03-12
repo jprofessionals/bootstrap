@@ -33,9 +33,7 @@ end
 
     server
         .client
-        .put(server.url(
-            "/api/editor/files/rooms/entrance.rb?repo=alice/alice",
-        ))
+        .put(server.url("/api/editor/files/rooms/entrance.rb?repo=alice/alice"))
         .json(&json!({"content": entrance}))
         .send()
         .await
@@ -43,9 +41,7 @@ end
 
     server
         .client
-        .post(server.url(
-            "/api/editor/files/rooms/garden.rb?repo=alice/alice",
-        ))
+        .post(server.url("/api/editor/files/rooms/garden.rb?repo=alice/alice"))
         .json(&json!({"content": garden}))
         .send()
         .await

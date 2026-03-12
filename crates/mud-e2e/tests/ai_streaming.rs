@@ -77,10 +77,8 @@ async fn ai_custom_provider_streaming() {
         if tokio::time::Instant::now() > deadline {
             panic!("Wiremock did not become ready");
         }
-        if let Ok(resp) = reqwest::get(format!(
-            "http://127.0.0.1:{wiremock_port}/__admin/mappings"
-        ))
-        .await
+        if let Ok(resp) =
+            reqwest::get(format!("http://127.0.0.1:{wiremock_port}/__admin/mappings")).await
         {
             if resp.status().is_success() {
                 break;
@@ -164,14 +162,8 @@ async fn ai_custom_provider_streaming() {
         body.contains("content_block_delta"),
         "should contain content_block_delta events"
     );
-    assert!(
-        body.contains("Hello"),
-        "should contain 'Hello' text delta"
-    );
-    assert!(
-        body.contains("world"),
-        "should contain 'world' text delta"
-    );
+    assert!(body.contains("Hello"), "should contain 'Hello' text delta");
+    assert!(body.contains("world"), "should contain 'world' text delta");
     assert!(
         body.contains("message_stop"),
         "should contain message_stop event"
@@ -355,9 +347,7 @@ async fn ai_custom_provider_crud() {
     // Delete the provider
     let resp = server
         .client
-        .delete(server.url(&format!(
-            "/api/ai/custom-provider/{provider_id}"
-        )))
+        .delete(server.url(&format!("/api/ai/custom-provider/{provider_id}")))
         .send()
         .await
         .unwrap();

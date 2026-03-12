@@ -137,10 +137,7 @@ mod tests {
 
         // Second request with matching If-None-Match
         let mut headers2 = HeaderMap::new();
-        headers2.insert(
-            header::IF_NONE_MATCH,
-            etag.parse().unwrap(),
-        );
+        headers2.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
         let resp2 = serve_static(&file_path, CacheMode::NoCache, &headers2)
             .await
             .unwrap();
@@ -239,12 +236,7 @@ mod tests {
             .await
             .unwrap();
 
-        let etag = resp
-            .headers()
-            .get(header::ETAG)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let etag = resp.headers().get(header::ETAG).unwrap().to_str().unwrap();
         // ETag format: "<mtime>-<size>"
         assert!(etag.starts_with('"'));
         assert!(etag.ends_with('"'));
@@ -258,10 +250,7 @@ mod tests {
         std::fs::write(&file_path, "hello").unwrap();
 
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::IF_NONE_MATCH,
-            "\"wrong-etag\"".parse().unwrap(),
-        );
+        headers.insert(header::IF_NONE_MATCH, "\"wrong-etag\"".parse().unwrap());
         let resp = serve_static(&file_path, CacheMode::NoCache, &headers)
             .await
             .unwrap();

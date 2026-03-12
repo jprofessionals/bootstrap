@@ -1,14 +1,16 @@
 use lpc_vm::bytecode::{LpcValue, ObjectRef};
 use lpc_vm::kfun::{
-    KfunContext, KfunRegistry,
-    T_ARRAY, T_FLOAT, T_INT, T_LWOBJECT, T_MAPPING, T_NIL, T_OBJECT, T_STRING,
+    KfunContext, KfunRegistry, T_ARRAY, T_FLOAT, T_INT, T_LWOBJECT, T_MAPPING, T_NIL, T_OBJECT,
+    T_STRING,
 };
 
 /// Create a registry with all defaults and call a kfun by name.
 fn call_kfun(name: &str, args: &[LpcValue]) -> Result<LpcValue, String> {
     let mut registry = KfunRegistry::new();
     registry.register_defaults();
-    let id = registry.lookup(name).ok_or_else(|| format!("kfun '{}' not found", name))?;
+    let id = registry
+        .lookup(name)
+        .ok_or_else(|| format!("kfun '{}' not found", name))?;
     let mut ticks: u64 = 1_000_000;
     let obj = ObjectRef {
         id: 0,
@@ -20,7 +22,9 @@ fn call_kfun(name: &str, args: &[LpcValue]) -> Result<LpcValue, String> {
         previous_object: None,
         tick_counter: &mut ticks,
     };
-    registry.call(id, &mut ctx, args).map_err(|e| format!("{e}"))
+    registry
+        .call(id, &mut ctx, args)
+        .map_err(|e| format!("{e}"))
 }
 
 // =========================================================================
@@ -122,10 +126,7 @@ fn explode_basic() {
 fn explode_empty_separator_splits_chars() {
     let result = call_kfun(
         "explode",
-        &[
-            LpcValue::String("abc".into()),
-            LpcValue::String("".into()),
-        ],
+        &[LpcValue::String("abc".into()), LpcValue::String("".into())],
     )
     .unwrap();
     let arr = result.as_array().unwrap();
@@ -184,9 +185,7 @@ fn sizeof_array() {
 
 #[test]
 fn sizeof_mapping() {
-    let m = LpcValue::Mapping(vec![
-        (LpcValue::String("a".into()), LpcValue::Int(1)),
-    ]);
+    let m = LpcValue::Mapping(vec![(LpcValue::String("a".into()), LpcValue::Int(1))]);
     let result = call_kfun("sizeof", &[m]).unwrap();
     assert_eq!(result.as_int(), Some(1));
 }
@@ -381,7 +380,7 @@ fn error_kfun_returns_err() {
 
 #[test]
 fn serialize_round_trip_int() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
     let vars = vec![("count".to_string(), LpcValue::Int(42))];
     let text = serialize_variables(&vars);
     let parsed = parse_saved_variables(&text).unwrap();
@@ -392,8 +391,11 @@ fn serialize_round_trip_int() {
 
 #[test]
 fn serialize_round_trip_string() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
-    let vars = vec![("name".to_string(), LpcValue::String("hello \"world\"".into()))];
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
+    let vars = vec![(
+        "name".to_string(),
+        LpcValue::String("hello \"world\"".into()),
+    )];
     let text = serialize_variables(&vars);
     let parsed = parse_saved_variables(&text).unwrap();
     assert_eq!(parsed[0].0, "name");
@@ -402,7 +404,7 @@ fn serialize_round_trip_string() {
 
 #[test]
 fn serialize_round_trip_array() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
     let arr = LpcValue::Array(vec![LpcValue::Int(1), LpcValue::Int(2), LpcValue::Int(3)]);
     let vars = vec![("data".to_string(), arr.clone())];
     let text = serialize_variables(&vars);
@@ -412,10 +414,8 @@ fn serialize_round_trip_array() {
 
 #[test]
 fn serialize_round_trip_mapping() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
-    let m = LpcValue::Mapping(vec![
-        (LpcValue::String("key".into()), LpcValue::Int(42)),
-    ]);
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
+    let m = LpcValue::Mapping(vec![(LpcValue::String("key".into()), LpcValue::Int(42))]);
     let vars = vec![("table".to_string(), m.clone())];
     let text = serialize_variables(&vars);
     let parsed = parse_saved_variables(&text).unwrap();
@@ -424,7 +424,7 @@ fn serialize_round_trip_mapping() {
 
 #[test]
 fn serialize_round_trip_nil() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
     let vars = vec![("empty".to_string(), LpcValue::Nil)];
     let text = serialize_variables(&vars);
     let parsed = parse_saved_variables(&text).unwrap();
@@ -433,7 +433,7 @@ fn serialize_round_trip_nil() {
 
 #[test]
 fn serialize_round_trip_float() {
-    use lpc_vm::kfun::serialize::{serialize_variables, parse_saved_variables};
+    use lpc_vm::kfun::serialize::{parse_saved_variables, serialize_variables};
     let vars = vec![("pi".to_string(), LpcValue::Float(3.14))];
     let text = serialize_variables(&vars);
     let parsed = parse_saved_variables(&text).unwrap();
@@ -524,16 +524,8 @@ fn hash_string_in_range() {
 
 #[test]
 fn sort_array_ints() {
-    let arr = LpcValue::Array(vec![
-        LpcValue::Int(3),
-        LpcValue::Int(1),
-        LpcValue::Int(2),
-    ]);
-    let result = call_kfun(
-        "sort_array",
-        &[arr, LpcValue::String("cmp".into())],
-    )
-    .unwrap();
+    let arr = LpcValue::Array(vec![LpcValue::Int(3), LpcValue::Int(1), LpcValue::Int(2)]);
+    let result = call_kfun("sort_array", &[arr, LpcValue::String("cmp".into())]).unwrap();
     let sorted = result.as_array().unwrap();
     assert_eq!(sorted[0].as_int(), Some(1));
     assert_eq!(sorted[1].as_int(), Some(2));

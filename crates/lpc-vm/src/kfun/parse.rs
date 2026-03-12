@@ -3,8 +3,8 @@
 //! DGD provides a built-in LR parser for grammar-based string parsing.
 //! This is a stub until the parser is implemented.
 
-use crate::bytecode::LpcValue;
 use super::{KfunContext, LpcError};
+use crate::bytecode::LpcValue;
 
 /// parse_string(string grammar, string input, varargs args...) -> mixed*
 ///

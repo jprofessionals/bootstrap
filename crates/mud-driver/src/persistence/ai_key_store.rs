@@ -55,11 +55,7 @@ impl AiKeyStore {
     }
 
     /// Retrieve and decrypt an API key for a specific provider.
-    pub async fn get_ai_api_key(
-        &self,
-        account: &str,
-        provider: &str,
-    ) -> Result<Option<String>> {
+    pub async fn get_ai_api_key(&self, account: &str, provider: &str) -> Result<Option<String>> {
         let row = sqlx::query(
             "SELECT encrypted_key FROM ai_api_keys WHERE account = $1 AND provider = $2",
         )
@@ -159,13 +155,12 @@ impl AiKeyStore {
 
     /// Check if a provider is enabled for this account.
     pub async fn is_provider_enabled(&self, account: &str, provider: &str) -> Result<bool> {
-        let row = sqlx::query(
-            "SELECT enabled FROM ai_api_keys WHERE account = $1 AND provider = $2",
-        )
-        .bind(account)
-        .bind(provider)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row =
+            sqlx::query("SELECT enabled FROM ai_api_keys WHERE account = $1 AND provider = $2")
+                .bind(account)
+                .bind(provider)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(row.map(|r| r.get("enabled")).unwrap_or(false))
     }
@@ -184,12 +179,11 @@ impl AiKeyStore {
         api_key: &str,
     ) -> Result<CustomProvider> {
         // Enforce max 5 custom providers per account
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM ai_custom_providers WHERE account = $1",
-        )
-        .bind(account)
-        .fetch_one(&self.pool)
-        .await?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM ai_custom_providers WHERE account = $1")
+                .bind(account)
+                .fetch_one(&self.pool)
+                .await?;
 
         if count >= 5 {
             anyhow::bail!("Maximum of 5 custom providers reached");
@@ -314,12 +308,11 @@ impl AiKeyStore {
 
     /// Delete a custom provider.
     pub async fn delete_custom_provider(&self, account: &str, id: i32) -> Result<()> {
-        let result =
-            sqlx::query("DELETE FROM ai_custom_providers WHERE account = $1 AND id = $2")
-                .bind(account)
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
+        let result = sqlx::query("DELETE FROM ai_custom_providers WHERE account = $1 AND id = $2")
+            .bind(account)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             anyhow::bail!("Custom provider not found");

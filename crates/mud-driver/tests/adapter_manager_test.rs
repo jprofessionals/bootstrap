@@ -3,9 +3,7 @@ use std::time::Duration;
 use mud_core::types::AreaId;
 use mud_driver::config::Config;
 use mud_driver::runtime::adapter_manager::AdapterManager;
-use mud_mop::codec::{
-    read_driver_message, write_adapter_message,
-};
+use mud_mop::codec::{read_driver_message, write_adapter_message};
 use mud_mop::message::{AdapterMessage, DriverMessage, Value};
 use tokio::net::UnixStream;
 use tokio::time::timeout;
@@ -77,9 +75,7 @@ async fn accept_connection_and_handshake() {
 
     // Manager accepts the connection
     let result = timeout(TEST_TIMEOUT, manager.accept_connection(&listener)).await;
-    let (language, additional) = result
-        .expect("accept timed out")
-        .expect("accept failed");
+    let (language, additional) = result.expect("accept timed out").expect("accept failed");
 
     assert_eq!(language, "ruby");
     assert!(additional.is_empty());
@@ -406,18 +402,12 @@ async fn send_to_nonexistent_adapter_returns_error() {
 
     // Try to send to a nonexistent "python" adapter
     let result = manager
-        .send_to(
-            "python",
-            DriverMessage::Ping { seq: 1 },
-        )
+        .send_to("python", DriverMessage::Ping { seq: 1 })
         .await;
 
     assert!(result.is_err());
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("python"),
+        result.unwrap_err().to_string().contains("python"),
         "error should mention the missing language"
     );
 

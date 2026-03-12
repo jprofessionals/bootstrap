@@ -134,8 +134,7 @@ impl ModuleLoader {
             .map_err(|e| ModuleError::LoadError(e.to_string()))?;
 
         let init_fn: libloading::Symbol<ModuleInitFn> =
-            unsafe { library.get(b"mud_module_init") }
-                .map_err(|_| ModuleError::InitNotFound)?;
+            unsafe { library.get(b"mud_module_init") }.map_err(|_| ModuleError::InitNotFound)?;
 
         let mut registrar = ModuleRegistrar::new();
         unsafe {

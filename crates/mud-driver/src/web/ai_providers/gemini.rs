@@ -81,25 +81,17 @@ impl GeminiProvider {
                     let mut parts = Vec::new();
 
                     for block in blocks {
-                        let block_type =
-                            block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         match block_type {
                             "text" => {
-                                if let Some(text) =
-                                    block.get("text").and_then(|t| t.as_str())
-                                {
+                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
                                     parts.push(serde_json::json!({"text": text}));
                                 }
                             }
                             "tool_use" => {
-                                let name = block
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                let args = block
-                                    .get("input")
-                                    .cloned()
-                                    .unwrap_or(serde_json::json!({}));
+                                let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let args =
+                                    block.get("input").cloned().unwrap_or(serde_json::json!({}));
                                 parts.push(serde_json::json!({
                                     "functionCall": {
                                         "name": name,
@@ -119,9 +111,7 @@ impl GeminiProvider {
                                     Some(serde_json::Value::String(s)) => s.clone(),
                                     Some(serde_json::Value::Array(arr)) => arr
                                         .iter()
-                                        .filter_map(|b| {
-                                            b.get("text").and_then(|t| t.as_str())
-                                        })
+                                        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
                                         .collect::<Vec<_>>()
                                         .join(""),
                                     _ => String::new(),
@@ -300,9 +290,7 @@ impl AiProvider for GeminiProvider {
             return events;
         };
 
-        let finish_reason = candidate
-            .get("finishReason")
-            .and_then(|f| f.as_str());
+        let finish_reason = candidate.get("finishReason").and_then(|f| f.as_str());
 
         // Process parts
         if let Some(parts) = candidate
@@ -609,8 +597,7 @@ mod tests {
                 }
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk1).unwrap());
 
         // Should get: message_start, content_block_start, content_block_delta
         assert_eq!(events.len(), 3);
@@ -631,8 +618,7 @@ mod tests {
                 }
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
 
         // Should get just content_block_delta (no new start)
         assert_eq!(events.len(), 1);
@@ -657,8 +643,7 @@ mod tests {
                 "finishReason": "STOP"
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk).unwrap());
 
         // message_start, content_block_start, content_block_delta, content_block_stop,
         // message_delta, message_stop
@@ -712,8 +697,7 @@ mod tests {
                 "finishReason": "STOP"
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
 
         // content_block_delta, content_block_stop (close text), message_delta, message_stop
         assert_eq!(events.len(), 4);
@@ -740,8 +724,7 @@ mod tests {
                 "finishReason": "MAX_TOKENS"
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk).unwrap());
 
         let msg_delta = events
             .iter()
@@ -781,20 +764,19 @@ mod tests {
                 "finishReason": "STOP"
             }]
         });
-        let events =
-            provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
+        let events = provider.translate_event("message", &serde_json::to_string(&chunk2).unwrap());
 
         // Close text block (content_block_stop), then tool start/delta/stop, then message_delta, message_stop
         let event_types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
         assert_eq!(
             event_types,
             vec![
-                "content_block_stop",     // close text block
-                "content_block_start",    // tool_use start
-                "content_block_delta",    // tool args
-                "content_block_stop",     // tool_use stop
-                "message_delta",          // stop_reason
-                "message_stop",           // done
+                "content_block_stop",  // close text block
+                "content_block_start", // tool_use start
+                "content_block_delta", // tool args
+                "content_block_stop",  // tool_use stop
+                "message_delta",       // stop_reason
+                "message_stop",        // done
             ]
         );
 
