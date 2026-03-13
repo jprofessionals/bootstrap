@@ -135,7 +135,9 @@ async fn build_harness() -> TestHarness {
         mop_rpc: None,
         area_web_sockets: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         area_templates: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        template_registry: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         loaded_areas: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        server_commands: tokio::sync::mpsc::channel(4).0,
     };
 
     let app = Router::new()

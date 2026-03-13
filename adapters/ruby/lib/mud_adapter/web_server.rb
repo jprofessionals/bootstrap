@@ -65,6 +65,7 @@ module MudAdapter
       MudAdapter::Stdlib::Portal::BaseApp.server_name_value = "MUD Driver"
       MudAdapter::Stdlib::Portal::BaseApp.area_loader = @area_loader
       MudAdapter::Stdlib::Portal::BaseApp.area_logger = @area_loader.logger
+      MudAdapter::Stdlib::Portal::BaseApp.views_dir = MudAdapter::StdlibRuntime.views_dir
       if ENV['MUD_WORLD_PATH']
         MudAdapter::Stdlib::Portal::BaseApp.world_path_value = ENV['MUD_WORLD_PATH']
       end

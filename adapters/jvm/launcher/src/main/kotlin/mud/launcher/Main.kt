@@ -2,7 +2,6 @@ package mud.launcher
 
 import mud.mop.client.MopClient
 import org.slf4j.LoggerFactory
-import java.io.File
 import kotlinx.coroutines.*
 
 private val logger = LoggerFactory.getLogger("mud.launcher.Main")
@@ -52,18 +51,12 @@ fun main(args: Array<String>) {
     client.sendHandshake()
     logger.info("Handshake sent")
 
-    // Send area templates in background
     client.onMessage = { msg -> dispatchDriverMessage(msg, router, processManager, client) }
 
     // Start read loop on background thread
     val readThread = Thread({ client.readLoop() }, "mop-read-loop")
     readThread.isDaemon = true
     readThread.start()
-
-    // Send area templates (after read loop is running so responses can be received)
-    runBlocking {
-        sendAreaTemplates(client)
-    }
 
     // Wait for read loop to finish (connection closed)
     readThread.join()
@@ -140,77 +133,6 @@ private fun dispatchDriverMessage(
             logger.warn("Unhandled driver message type: {}", msg["type"])
         }
     }
-}
-
-private suspend fun sendAreaTemplates(client: MopClient) {
-    val templateDir = findTemplateDir() ?: run {
-        logger.warn("No template directory found, skipping template registration")
-        return
-    }
-
-    // Load base template files
-    val baseDir = File(templateDir, "base")
-    val overlaysDir = File(templateDir, "overlays")
-
-    if (!baseDir.isDirectory) {
-        logger.warn("No base template directory at {}", baseDir)
-        return
-    }
-
-    // Collect overlay names
-    val overlays = overlaysDir.listFiles()
-        ?.filter { it.isDirectory }
-        ?.map { it.name }
-        ?: emptyList()
-
-    if (overlays.isEmpty()) {
-        // Send a single template from base
-        val files = collectFiles(baseDir)
-        sendTemplate(client, "kotlin:default", files)
-        return
-    }
-
-    // Send one template per overlay (base + overlay merged)
-    for (overlay in overlays) {
-        val baseFiles = collectFiles(baseDir)
-        val overlayFiles = collectFiles(File(overlaysDir, overlay))
-        val merged = baseFiles + overlayFiles // overlay files override base
-        sendTemplate(client, "kotlin:$overlay", merged)
-    }
-}
-
-private suspend fun sendTemplate(client: MopClient, name: String, files: Map<String, String>) {
-    try {
-        client.sendDriverRequest("set_area_template", mapOf(
-            "name" to name,
-            "files" to files,
-        ))
-        logger.info("Sent area template '{}' ({} files)", name, files.size)
-    } catch (e: Exception) {
-        logger.error("Failed to send area template '{}'", name, e)
-    }
-}
-
-private fun collectFiles(dir: File): Map<String, String> {
-    if (!dir.isDirectory) return emptyMap()
-    val files = mutableMapOf<String, String>()
-    dir.walkTopDown()
-        .filter { it.isFile }
-        .forEach { file ->
-            val rel = file.relativeTo(dir).path
-            files[rel] = file.readText()
-        }
-    return files
-}
-
-private fun findTemplateDir(): File? {
-    // Look relative to the launcher JAR or working directory
-    val candidates = listOf(
-        File("stdlib/templates/area"),
-        File("adapters/jvm/stdlib/templates/area"),
-        File(System.getProperty("mud.template.dir", "")),
-    )
-    return candidates.firstOrNull { it.isDirectory }
 }
 
 private fun parseSocketPath(args: Array<String>): String {

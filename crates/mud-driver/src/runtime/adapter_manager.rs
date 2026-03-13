@@ -73,7 +73,14 @@ impl AdapterManager {
             if ruby.enabled {
                 let socket_str = self.socket_path.to_string_lossy().to_string();
                 let world_path = config.world.resolved_path();
-                self.spawn_adapter(&ruby.command, &ruby.adapter_path, &socket_str, &world_path)?;
+                let git_path = config.world.resolved_git_path();
+                self.spawn_adapter(
+                    &ruby.command,
+                    &ruby.adapter_path,
+                    &socket_str,
+                    &world_path,
+                    &git_path,
+                )?;
                 info!("spawned Ruby adapter process");
             }
         }
@@ -82,7 +89,14 @@ impl AdapterManager {
             if jvm.enabled {
                 let socket_str = self.socket_path.to_string_lossy().to_string();
                 let world_path = config.world.resolved_path();
-                self.spawn_adapter(&jvm.command, &jvm.adapter_path, &socket_str, &world_path)?;
+                let git_path = config.world.resolved_git_path();
+                self.spawn_adapter(
+                    &jvm.command,
+                    &jvm.adapter_path,
+                    &socket_str,
+                    &world_path,
+                    &git_path,
+                )?;
                 info!("spawned JVM adapter process");
             }
         }
@@ -91,7 +105,14 @@ impl AdapterManager {
             if lpc.enabled {
                 let socket_str = self.socket_path.to_string_lossy().to_string();
                 let world_path = config.world.resolved_path();
-                self.spawn_adapter(&lpc.command, &lpc.adapter_path, &socket_str, &world_path)?;
+                let git_path = config.world.resolved_git_path();
+                self.spawn_adapter(
+                    &lpc.command,
+                    &lpc.adapter_path,
+                    &socket_str,
+                    &world_path,
+                    &git_path,
+                )?;
                 info!("spawned LPC adapter process");
             }
         }
@@ -213,6 +234,7 @@ impl AdapterManager {
         adapter_path: &str,
         socket_path: &str,
         world_path: &std::path::Path,
+        git_path: &std::path::Path,
     ) -> Result<()> {
         let mut cmd = Command::new(command);
 
@@ -226,6 +248,7 @@ impl AdapterManager {
             .arg("--socket")
             .arg(socket_path)
             .env("MUD_WORLD_PATH", world_path)
+            .env("MUD_GIT_PATH", git_path)
             .kill_on_drop(true)
             .spawn()
             .with_context(|| {

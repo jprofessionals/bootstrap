@@ -122,7 +122,7 @@ pub const DRIVER_MIGRATIONS: &[&str] = &[
 // NOTE: Stdlib table schemas (players, characters, access_tokens, sessions)
 // are owned by the Ruby stdlib. The driver sends the stdlib DB URL to the
 // adapter via a Configure message, and the adapter runs its own Sequel
-// migrations. See adapters/ruby/lib/mud_adapter/stdlib/migrations/.
+// migrations. See bootstrap/ruby/stdlib/migrations/.
 // ============================================================================
 
 #[cfg(test)]

@@ -485,7 +485,7 @@ async fn jvm_ktor_api_backend() {
 /// Test that JVM templates are available via disk scanning even when the
 /// JVM adapter process is not running.
 ///
-/// The driver scans `adapters/jvm/stdlib/templates/area/` at boot time and
+/// The driver scans `bootstrap/jvm/templates/area/` at boot time and
 /// registers kotlin:ktor, kotlin:quarkus, kotlin:spring-boot templates from
 /// the base + overlay directories on disk.  This allows builders to create
 /// JVM repos from the portal even if the JVM adapter is disabled.

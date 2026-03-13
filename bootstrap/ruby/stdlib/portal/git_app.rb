@@ -200,11 +200,9 @@ module MudAdapter
         def commit_changes(namespace, name, message)
           halt_status(400) unless message && !message.empty?
 
-          # TODO: Send DriverRequest to commit via MOP
           mop_client&.send_driver_request('workspace_commit', {
             namespace: namespace, name: name, author: current_account, message: message
           })
-          trigger_reload(namespace, name)
           { status: 'committed', message: message }
         end
 
@@ -311,16 +309,6 @@ module MudAdapter
           repo_names = mop_client&.send_driver_request('repo_list', { owner: account }) || []
           repos = repo_names.map { |name| "#{account}/#{name}" }
           render_full(:git_dashboard, server_name: server_name, repos: repos, account: account)
-        end
-
-        def trigger_reload(namespace, name)
-          work_path = resolve_work_path(namespace, name)
-          mop_client&.send_driver_request('area_reload', {
-            area_id: "#{namespace}/#{name}", path: work_path
-          })
-        rescue StandardError
-          # Best-effort: don't fail the commit if reload fails
-          nil
         end
       end
     end

@@ -19,6 +19,7 @@ COPY target/x86_64-unknown-linux-musl/release/mud-adapter-lpc /usr/local/bin/mud
 
 # Ruby adapter
 COPY adapters/ruby/ adapters/ruby/
+COPY bootstrap/ bootstrap/
 
 ENV BUNDLE_GEMFILE=/app/adapters/ruby/Gemfile
 ENV BUNDLE_PATH=/app/adapters/ruby/vendor/bundle
@@ -26,9 +27,8 @@ ENV BUNDLE_WITHOUT=development:test
 
 RUN cd adapters/ruby && bundle install
 
-# JVM adapter: launcher JAR + stdlib templates + Gradle wrapper for area builds
+# JVM adapter: launcher JAR + bootstrap templates + Gradle wrapper for area builds
 COPY adapters/jvm/launcher/build/libs/launcher.jar adapters/jvm/launcher.jar
-COPY adapters/jvm/stdlib/templates/ adapters/jvm/stdlib/templates/
 COPY adapters/jvm/gradle/ adapters/jvm/gradle/
 COPY adapters/jvm/gradlew adapters/jvm/gradlew
 RUN chmod +x adapters/jvm/gradlew

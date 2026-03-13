@@ -110,6 +110,16 @@ pub enum DriverMessage {
         action: String,
     },
 
+    /// Ask the adapter/stdlib to evaluate repo access policy.
+    #[serde(rename = "check_repo_access")]
+    CheckRepoAccess {
+        request_id: u64,
+        username: String,
+        namespace: String,
+        name: String,
+        level: String,
+    },
+
     /// Ask the adapter to reload specific changed files within an area (surgical reload).
     #[serde(rename = "reload_program")]
     ReloadProgram {
@@ -117,6 +127,10 @@ pub enum DriverMessage {
         path: String,
         files: Vec<String>,
     },
+
+    /// Ask the adapter to reload the active stdlib runtime.
+    #[serde(rename = "reload_stdlib")]
+    ReloadStdlib { subsystem: String },
 
     /// Ask the adapter to provide web template data for an area.
     #[serde(rename = "get_web_data")]
@@ -233,6 +247,30 @@ mod tests {
             area_id: AreaId::new("system", "lobby"),
             path: "/world/system/lobby".into(),
             db_url: None,
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
+        let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn check_repo_access_round_trip() {
+        let msg = DriverMessage::CheckRepoAccess {
+            request_id: 77,
+            username: "alice".into(),
+            namespace: "system".into(),
+            name: "stdlib".into(),
+            level: "read_write".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
+        let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn reload_stdlib_round_trip() {
+        let msg = DriverMessage::ReloadStdlib {
+            subsystem: "portal".into(),
         };
         let bytes = rmp_serde::to_vec_named(&msg).expect("serialize");
         let decoded: DriverMessage = rmp_serde::from_slice(&bytes).expect("deserialize");

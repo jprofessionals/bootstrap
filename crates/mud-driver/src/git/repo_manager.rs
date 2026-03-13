@@ -13,18 +13,24 @@ pub enum AccessLevel {
     ReadWrite,
 }
 
-/// YAML-serialized access control list for a repository.
+/// YAML-serialized access policy for a repository.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoAcl {
+pub struct RepoPolicy {
     pub owner: String,
     #[serde(default)]
-    pub collaborators: HashMap<String, AccessLevel>,
+    pub users: Vec<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub user_levels: HashMap<String, AccessLevel>,
+    #[serde(default)]
+    pub role_levels: HashMap<String, AccessLevel>,
 }
 
-/// Manages bare git repositories and their YAML-based ACLs.
+/// Manages bare git repositories and their YAML-based access policies.
 ///
 /// Each repository lives at `base_path/<ns>/<name>.git` (bare) with an
-/// accompanying `<name>.git.acl.yml` file for access control.
+/// accompanying `<name>.git.policy.yml` file for access control.
 pub struct RepoManager {
     base_path: PathBuf,
 }
@@ -43,11 +49,11 @@ impl RepoManager {
         self.base_path.join(ns).join(format!("{}.git", name))
     }
 
-    /// Path to ACL file: `base_path/ns/name.git.acl.yml`
-    fn acl_path(&self, ns: &str, name: &str) -> PathBuf {
+    /// Path to policy file: `base_path/ns/name.git.policy.yml`
+    fn policy_path(&self, ns: &str, name: &str) -> PathBuf {
         self.base_path
             .join(ns)
-            .join(format!("{}.git.acl.yml", name))
+            .join(format!("{}.git.policy.yml", name))
     }
 
     /// Create a bare git repo with initial commit and both `main` + `develop` branches.
@@ -85,14 +91,29 @@ impl RepoManager {
             self.seed_initial_commit(&repo, ns, name, template_files)?;
         }
 
-        // Write default ACL with namespace as owner
-        let acl = RepoAcl {
+        let policy = RepoPolicy {
             owner: ns.to_string(),
-            collaborators: HashMap::new(),
+            users: Vec::new(),
+            roles: Vec::new(),
+            user_levels: HashMap::new(),
+            role_levels: HashMap::new(),
         };
-        self.write_acl(ns, name, &acl)?;
+        self.write_policy(ns, name, &policy)?;
 
         Ok(())
+    }
+
+    /// Create a new repo using the contents of another repository's branch as
+    /// the initial template, but with fresh history in the destination repo.
+    pub fn create_repo_from_template_repo(
+        &self,
+        ns: &str,
+        name: &str,
+        template_repo_path: &Path,
+        source_branch: &str,
+    ) -> Result<()> {
+        let files = Self::template_files_from_repo(template_repo_path, source_branch)?;
+        self.create_repo(ns, name, true, Some(&files))
     }
 
     /// Seed initial commit with template files on `main` branch, then create `develop` branch.
@@ -110,8 +131,7 @@ impl RepoManager {
         let sig = git2::Signature::now("MUD Driver", "mud@localhost")?;
         let mut index = repo.index()?;
 
-        let default_files = Self::default_template_files();
-        let files = template_files.unwrap_or(&default_files);
+        let files = Self::seed_files(ns, template_files);
 
         // Sort keys for deterministic tree ordering
         let mut paths: Vec<&String> = files.keys().collect();
@@ -147,6 +167,17 @@ impl RepoManager {
         repo.set_head("refs/heads/main")?;
 
         Ok(())
+    }
+
+    fn seed_files(
+        ns: &str,
+        template_files: Option<&HashMap<String, String>>,
+    ) -> HashMap<String, String> {
+        let mut files = template_files.cloned().unwrap_or_else(Self::default_template_files);
+        files
+            .entry(".meta.yml".into())
+            .or_insert_with(|| format!("owner: {ns}\n"));
+        files
     }
 
     /// Add a blob to the in-memory index at the given path.
@@ -202,6 +233,86 @@ impl RepoManager {
         files
     }
 
+    fn template_files_from_repo(
+        template_repo_path: &Path,
+        source_branch: &str,
+    ) -> Result<HashMap<String, String>> {
+        let repo = git2::Repository::open(template_repo_path)
+            .or_else(|_| git2::Repository::open_bare(template_repo_path))
+            .with_context(|| {
+                format!(
+                    "opening template repository at {}",
+                    template_repo_path.display()
+                )
+            })?;
+
+        let branch_candidates = [
+            format!("refs/heads/{source_branch}"),
+            format!("refs/remotes/origin/{source_branch}"),
+        ];
+        let mut commit = None;
+        for reference_name in &branch_candidates {
+            if let Ok(reference) = repo.find_reference(reference_name) {
+                commit = Some(reference.peel_to_commit()?);
+                break;
+            }
+        }
+        let commit = commit.with_context(|| {
+            format!(
+                "finding source branch '{}' in template repo {}",
+                source_branch,
+                template_repo_path.display()
+            )
+        })?;
+
+        let tree = commit.tree()?;
+        let mut files = HashMap::new();
+        Self::collect_tree_files(&repo, "", &tree, &mut files)?;
+
+        if !files.contains_key(".meta.yml") {
+            files.insert(".meta.yml".into(), "owner: {{namespace}}\n".into());
+        }
+
+        Ok(files)
+    }
+
+    fn collect_tree_files(
+        repo: &git2::Repository,
+        prefix: &str,
+        tree: &git2::Tree<'_>,
+        files: &mut HashMap<String, String>,
+    ) -> Result<()> {
+        for entry in tree {
+            let Some(name) = entry.name() else {
+                continue;
+            };
+            let path = if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{prefix}/{name}")
+            };
+
+            match entry.kind() {
+                Some(git2::ObjectType::Blob) => {
+                    if path == ".gitkeep" || path.ends_with("/.gitkeep") {
+                        continue;
+                    }
+                    let blob = repo.find_blob(entry.id())?;
+                    let content = std::str::from_utf8(blob.content()).with_context(|| {
+                        format!("template file '{}' is not valid UTF-8", path)
+                    })?;
+                    files.insert(path, content.to_string());
+                }
+                Some(git2::ObjectType::Tree) => {
+                    let subtree = repo.find_tree(entry.id())?;
+                    Self::collect_tree_files(repo, &path, &subtree, files)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Check whether a repository exists on disk.
     pub fn repo_exists(&self, ns: &str, name: &str) -> bool {
         self.repo_path(ns, name).exists()
@@ -226,15 +337,15 @@ impl RepoManager {
         Ok(repos)
     }
 
-    /// Delete a repository and its ACL file.
+    /// Delete a repository and its policy file.
     pub fn delete_repo(&self, ns: &str, name: &str) -> Result<()> {
         let repo_path = self.repo_path(ns, name);
         if repo_path.exists() {
             std::fs::remove_dir_all(&repo_path)?;
         }
-        let acl_path = self.acl_path(ns, name);
-        if acl_path.exists() {
-            std::fs::remove_file(&acl_path)?;
+        let policy_path = self.policy_path(ns, name);
+        if policy_path.exists() {
+            std::fs::remove_file(&policy_path)?;
         }
         Ok(())
     }
@@ -244,27 +355,11 @@ impl RepoManager {
     // -----------------------------------------------------------------------
 
     /// Check whether `username` has the requested `level` of access to a repo.
-    ///
-    /// The owner always has full access. Collaborators are checked against
-    /// the ACL: `ReadWrite` grants both read and write, `ReadOnly` grants
-    /// only read access.
     pub fn can_access(&self, username: &str, ns: &str, name: &str, level: &AccessLevel) -> bool {
-        let acl = match self.get_acl(ns, name) {
-            Ok(acl) => acl,
-            Err(_) => return false,
-        };
-
-        // Owner has full access
-        if acl.owner == username {
-            return true;
+        if let Ok(policy) = self.get_policy(ns, name) {
+            return self.policy_allows(&policy, username, level);
         }
-
-        // Check collaborators
-        match acl.collaborators.get(username) {
-            Some(AccessLevel::ReadWrite) => true,
-            Some(AccessLevel::ReadOnly) => *level == AccessLevel::ReadOnly,
-            None => false,
-        }
+        false
     }
 
     /// Grant a collaborator access at the given level.
@@ -275,39 +370,55 @@ impl RepoManager {
         username: &str,
         level: AccessLevel,
     ) -> Result<()> {
-        let mut acl = self.get_acl(ns, name)?;
-        acl.collaborators.insert(username.to_string(), level);
-        self.write_acl(ns, name, &acl)
+        let mut policy = self.get_policy(ns, name)?;
+        policy.users.retain(|user| user != username);
+        policy.user_levels.insert(username.to_string(), level);
+        self.write_policy(ns, name, &policy)
     }
 
     /// Revoke a collaborator's access entirely.
     pub fn revoke_access(&self, ns: &str, name: &str, username: &str) -> Result<()> {
-        let mut acl = self.get_acl(ns, name)?;
-        acl.collaborators.remove(username);
-        self.write_acl(ns, name, &acl)
+        let mut policy = self.get_policy(ns, name)?;
+        policy.users.retain(|user| user != username);
+        policy.user_levels.remove(username);
+        self.write_policy(ns, name, &policy)
     }
 
-    /// Read the ACL for a repo. Returns a default (owner = ns, no collaborators)
-    /// if the ACL file does not exist.
-    pub fn get_acl(&self, ns: &str, name: &str) -> Result<RepoAcl> {
-        let path = self.acl_path(ns, name);
+    /// Read the repo access policy. Returns a default (owner = ns, no grants)
+    /// if the policy file does not exist.
+    pub fn get_policy(&self, ns: &str, name: &str) -> Result<RepoPolicy> {
+        let path = self.policy_path(ns, name);
         if !path.exists() {
-            return Ok(RepoAcl {
+            return Ok(RepoPolicy {
                 owner: ns.to_string(),
-                collaborators: HashMap::new(),
+                users: Vec::new(),
+                roles: Vec::new(),
+                user_levels: HashMap::new(),
+                role_levels: HashMap::new(),
             });
         }
         let content = std::fs::read_to_string(&path)?;
-        let acl: RepoAcl = serde_yaml::from_str(&content)?;
-        Ok(acl)
+        let policy: RepoPolicy = serde_yaml::from_str(&content)?;
+        Ok(policy)
     }
 
-    /// Write the ACL to the YAML file on disk.
-    fn write_acl(&self, ns: &str, name: &str, acl: &RepoAcl) -> Result<()> {
-        let path = self.acl_path(ns, name);
-        let content = serde_yaml::to_string(acl)?;
+    fn write_policy(&self, ns: &str, name: &str, policy: &RepoPolicy) -> Result<()> {
+        let path = self.policy_path(ns, name);
+        let content = serde_yaml::to_string(policy)?;
         std::fs::write(&path, content)?;
         Ok(())
+    }
+
+    fn policy_allows(&self, policy: &RepoPolicy, username: &str, level: &AccessLevel) -> bool {
+        if policy.owner == username || policy.users.iter().any(|user| user == username) {
+            return true;
+        }
+
+        match policy.user_levels.get(username) {
+            Some(AccessLevel::ReadWrite) => true,
+            Some(AccessLevel::ReadOnly) => *level == AccessLevel::ReadOnly,
+            None => false,
+        }
     }
 
     /// Validate a namespace or repo name: must be non-empty and match `[a-z0-9_]+`.
@@ -478,8 +589,7 @@ mod tests {
         mgr.delete_repo("testns", "village").unwrap();
         assert!(!mgr.repo_exists("testns", "village"));
 
-        // ACL file should also be gone
-        assert!(!mgr.acl_path("testns", "village").exists());
+        assert!(!mgr.policy_path("testns", "village").exists());
     }
 
     #[test]
@@ -490,23 +600,22 @@ mod tests {
     }
 
     #[test]
-    fn test_acl_default() {
+    fn test_policy_default() {
         let (_dir, mgr) = setup();
 
-        // Default ACL when no file exists
-        let acl = mgr.get_acl("testns", "village").unwrap();
-        assert_eq!(acl.owner, "testns");
-        assert!(acl.collaborators.is_empty());
+        let policy = mgr.get_policy("testns", "village").unwrap();
+        assert_eq!(policy.owner, "testns");
+        assert!(policy.user_levels.is_empty());
     }
 
     #[test]
-    fn test_acl_after_create() {
+    fn test_policy_after_create() {
         let (_dir, mgr) = setup();
 
         mgr.create_repo("testns", "village", false, None).unwrap();
-        let acl = mgr.get_acl("testns", "village").unwrap();
-        assert_eq!(acl.owner, "testns");
-        assert!(acl.collaborators.is_empty());
+        let policy = mgr.get_policy("testns", "village").unwrap();
+        assert_eq!(policy.owner, "testns");
+        assert!(policy.user_levels.is_empty());
     }
 
     #[test]
@@ -565,5 +674,43 @@ mod tests {
         let (_dir, mgr) = setup();
         let path = mgr.repo_path("testns", "village");
         assert!(path.ends_with("testns/village.git"));
+    }
+
+    #[test]
+    fn test_create_repo_from_template_repo_creates_fresh_history() {
+        let (_dir, mgr) = setup();
+        let template_dir = TempDir::new().unwrap();
+        let template_mgr = RepoManager::new(template_dir.path().to_path_buf());
+
+        let mut template_files = HashMap::new();
+        template_files.insert("README.md".into(), "# {{area_name}}\n".into());
+        template_files.insert("mud.yaml".into(), "language: lpc\n".into());
+        template_mgr
+            .create_repo("system", "template_lpc", true, Some(&template_files))
+            .unwrap();
+
+        let checkout_dir = TempDir::new().unwrap();
+        let workspace = crate::git::workspace::Workspace::new(
+            checkout_dir.path().to_path_buf(),
+            std::sync::Arc::new(template_mgr),
+        );
+        let template_worktree = workspace.checkout("system", "template_lpc").unwrap();
+
+        mgr.create_repo_from_template_repo("alice", "wonder", &template_worktree, "main")
+            .unwrap();
+
+        let repo_path = mgr.repo_path("alice", "wonder");
+        let repo = git2::Repository::open_bare(&repo_path).unwrap();
+        let main_ref = repo.find_reference("refs/heads/main").unwrap();
+        let develop_ref = repo.find_reference("refs/heads/develop").unwrap();
+        assert_eq!(main_ref.target(), develop_ref.target());
+
+        let commit = repo.find_commit(main_ref.target().unwrap()).unwrap();
+        assert_eq!(commit.parent_count(), 0);
+
+        let tree = commit.tree().unwrap();
+        assert!(tree.get_name("README.md").is_some());
+        assert!(tree.get_name("mud.yaml").is_some());
+        assert!(tree.get_name(".meta.yml").is_some());
     }
 }

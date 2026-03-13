@@ -15,6 +15,7 @@ pub struct CommitInfo {
 }
 
 /// A single file change in a diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffEntry {
     pub path: String,
     /// One of: "added", "modified", "deleted", "renamed", "unknown"
@@ -97,6 +98,16 @@ impl Workspace {
     /// Pull (fetch + hard reset) a specific branch in its working directory.
     /// If the working directory doesn't exist yet, it is created via `checkout()`.
     pub fn pull(&self, ns: &str, name: &str, branch: &str) -> Result<()> {
+        self.pull_with_changed_files(ns, name, branch).map(|_| ())
+    }
+
+    /// Pull a branch and return the changed files between the old and new head.
+    pub fn pull_with_changed_files(
+        &self,
+        ns: &str,
+        name: &str,
+        branch: &str,
+    ) -> Result<Vec<DiffEntry>> {
         let work_path = self.path_for_branch(ns, name, branch);
         if git2::Repository::open(&work_path).is_err() {
             // Working directory missing or corrupt — (re-)checkout from bare repo.
@@ -108,6 +119,8 @@ impl Workspace {
         let repo = git2::Repository::open(&work_path)
             .with_context(|| format!("opening repo at {}", work_path.display()))?;
 
+        let old_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
         // Fetch from origin
         let mut remote = repo.find_remote("origin")?;
         remote.fetch(&[branch], None, None)?;
@@ -115,9 +128,10 @@ impl Workspace {
         // Reset to fetched branch
         let fetch_head = repo.find_reference(&format!("refs/remotes/origin/{}", branch))?;
         let target = fetch_head.peel_to_commit()?;
+        let changes = Self::diff_between_commits(&repo, old_commit.as_ref(), Some(&target))?;
         repo.reset(target.as_object(), git2::ResetType::Hard, None)?;
 
-        Ok(())
+        Ok(changes)
     }
 
     /// Commit all changes in the working directory and push to origin.
@@ -156,6 +170,21 @@ impl Workspace {
         )?;
 
         Ok(commit_oid.to_string())
+    }
+
+    /// Return the changed files introduced by a commit in the working repo.
+    pub fn changed_files_for_commit(
+        &self,
+        ns: &str,
+        name: &str,
+        branch: &str,
+        oid: &str,
+    ) -> Result<Vec<DiffEntry>> {
+        let work_path = self.path_for_branch(ns, name, branch);
+        let repo = git2::Repository::open(&work_path)?;
+        let commit = repo.find_commit(git2::Oid::from_str(oid)?)?;
+        let parent = commit.parent(0).ok();
+        Self::diff_between_commits(&repo, parent.as_ref(), Some(&commit))
     }
 
     /// Get the commit log for a branch, up to `limit` entries.
@@ -294,6 +323,45 @@ impl Workspace {
         } else {
             self.workspace_path(ns, name)
         }
+    }
+
+    fn diff_between_commits(
+        repo: &git2::Repository,
+        old_commit: Option<&git2::Commit>,
+        new_commit: Option<&git2::Commit>,
+    ) -> Result<Vec<DiffEntry>> {
+        let old_tree = match old_commit {
+            Some(commit) => Some(commit.tree()?),
+            None => None,
+        };
+        let new_tree = match new_commit {
+            Some(commit) => Some(commit.tree()?),
+            None => None,
+        };
+        let diff = repo.diff_tree_to_tree(old_tree.as_ref(), new_tree.as_ref(), None)?;
+
+        let mut entries = Vec::new();
+        for delta in diff.deltas() {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let status = match delta.status() {
+                git2::Delta::Added => "added",
+                git2::Delta::Modified => "modified",
+                git2::Delta::Deleted => "deleted",
+                git2::Delta::Renamed => "renamed",
+                _ => "unknown",
+            };
+            entries.push(DiffEntry {
+                path,
+                status: status.to_string(),
+            });
+        }
+
+        Ok(entries)
     }
 }
 

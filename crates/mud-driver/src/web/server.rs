@@ -21,7 +21,7 @@ use crate::git::workspace::Workspace;
 use crate::mop_rpc::MopRpcClient;
 use crate::persistence::ai_key_store::AiKeyStore;
 use crate::persistence::player_store::PlayerStore;
-use crate::server::AreaTemplates;
+use crate::server::{AreaTemplates, ServerCommand, TemplateRegistry};
 use crate::web::ai::ai_routes;
 use crate::web::build_log::BuildLog;
 use crate::web::build_manager::BuildManager;
@@ -51,7 +51,9 @@ pub struct AppState {
     pub mop_rpc: Option<MopRpcClient>,
     pub area_web_sockets: super::project::AreaWebSockets,
     pub area_templates: AreaTemplates,
+    pub template_registry: TemplateRegistry,
     pub loaded_areas: std::sync::Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
+    pub server_commands: tokio::sync::mpsc::Sender<ServerCommand>,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +89,7 @@ impl WebServer {
             self.state.repo_manager.clone(),
             self.state.workspace.clone(),
             self.state.area_templates.clone(),
+            self.state.template_registry.clone(),
         );
         let project = project_routes(
             world_path,

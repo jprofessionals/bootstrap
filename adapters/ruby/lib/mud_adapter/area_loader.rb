@@ -27,6 +27,17 @@ module MudAdapter
       @logger.register_area(key, path)
       @logger.log(key, :info, :reload_start, "Loading area #{key}")
 
+      if stdlib_area?(area_id)
+        MudAdapter::StdlibRuntime.refresh_from_world!
+        MudAdapter::Stdlib::Portal::BaseApp.views_dir = MudAdapter::StdlibRuntime.views_dir
+        @client.send_message(
+          "type" => "area_loaded",
+          "area_id" => area_id
+        )
+        @logger.log(key, :info, :reload_end, "Loaded stdlib runtime")
+        return
+      end
+
       error_count = 0
 
       begin
@@ -66,6 +77,20 @@ module MudAdapter
     # Reload a previously loaded area by clearing its data and reloading.
     def reload_area(area_id, path, db_url: nil)
       key = area_key(area_id)
+      if stdlib_area?(area_id)
+        @logger.register_area(key, path)
+        @logger.log(key, :info, :reload_start, "Reloading stdlib runtime #{key}")
+        MudAdapter::StdlibRuntime.refresh_from_world!
+        MudAdapter::StdlibRuntime.reload!(:all)
+        MudAdapter::Stdlib::Portal::BaseApp.views_dir = MudAdapter::StdlibRuntime.views_dir
+        @client.send_message(
+          "type" => "area_loaded",
+          "area_id" => area_id
+        )
+        @logger.log(key, :info, :reload_end, "Reloaded stdlib runtime")
+        return
+      end
+
       existing = @areas[key]
 
       unless existing
@@ -228,6 +253,10 @@ module MudAdapter
         "message" => message,
         "area" => nil
       )
+    end
+
+    def stdlib_area?(area_id)
+      area_id["namespace"] == "system" && area_id["name"] == "stdlib"
     end
   end
 end

@@ -1,4 +1,5 @@
 use std::sync::LazyLock;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use testcontainers::core::{IntoContainerPort, Mount};
@@ -91,15 +92,39 @@ static IMAGE_BUILT: LazyLock<()> = LazyLock::new(|| {
 
     // Build Docker image (copies pre-built binary, adapters, and dependencies)
     log(t0, "Building Docker image...");
-    let status = std::process::Command::new("docker")
-        .args([
+    let use_buildx = std::process::Command::new("docker")
+        .args(["buildx", "version"])
+        .current_dir(project_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    let mut command = std::process::Command::new("docker");
+    if use_buildx {
+        command.args([
+            "buildx",
+            "build",
+            "--load",
+            "-f",
+            "Dockerfile.e2e",
+            "-t",
+            &format!("{IMAGE_NAME}:{IMAGE_TAG}"),
+            ".",
+        ]);
+    } else {
+        command.args([
             "build",
             "-f",
             "Dockerfile.e2e",
             "-t",
             &format!("{IMAGE_NAME}:{IMAGE_TAG}"),
             ".",
-        ])
+        ]);
+    }
+
+    let status = command
         .current_dir(project_root)
         .status()
         .expect("failed to run docker build");
@@ -413,10 +438,21 @@ adapters:
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        // Clean up the Docker network
         let _ = std::process::Command::new("docker")
-            .args(["network", "rm", &self.network_name])
+            .args(["rm", "-f", self._driver.id(), self._pg.id()])
             .status();
+
+        for _ in 0..10 {
+            let status = std::process::Command::new("docker")
+                .args(["network", "rm", &self.network_name])
+                .status();
+
+            if matches!(status, Ok(s) if s.success()) {
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
 }
 

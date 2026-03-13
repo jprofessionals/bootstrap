@@ -475,10 +475,9 @@ fn acl_integration_with_workflow() {
 
     mgr.create_repo("vikings", "treasury", true, None).unwrap();
 
-    // Default ACL: namespace is owner
-    let acl = mgr.get_acl("vikings", "treasury").unwrap();
-    assert_eq!(acl.owner, "vikings");
-    assert!(acl.collaborators.is_empty());
+    let policy = mgr.get_policy("vikings", "treasury").unwrap();
+    assert_eq!(policy.owner, "vikings");
+    assert!(policy.user_levels.is_empty());
 
     // Owner can access
     assert!(mgr.can_access(

@@ -16,6 +16,7 @@ pub struct Config {
     pub world: WorldConfig,
     pub tick: TickConfig,
     pub database: DatabaseConfig,
+    pub bootstrap: BootstrapConfig,
     pub adapters: AdaptersConfig,
     pub ai: AiConfig,
 }
@@ -29,6 +30,7 @@ impl Default for Config {
             world: WorldConfig::default(),
             tick: TickConfig::default(),
             database: DatabaseConfig::default(),
+            bootstrap: BootstrapConfig::default(),
             adapters: AdaptersConfig::default(),
             ai: AiConfig::default(),
         }
@@ -42,14 +44,18 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             tracing::warn!(?path, "Config file not found — using defaults");
-            let cfg = Self::default();
+            let mut cfg = Self::default();
+            cfg.apply_env_overrides();
             cfg.validate()?;
             return Ok(cfg);
         }
 
         let contents =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Self::from_yaml(&contents)
+        let mut cfg = Self::from_yaml(&contents)?;
+        cfg.apply_env_overrides();
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     /// Parse a YAML string into a `Config` (useful for testing).
@@ -57,6 +63,26 @@ impl Config {
         let cfg: Self = serde_yaml::from_str(yaml).context("failed to parse YAML configuration")?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    fn apply_env_overrides(&mut self) {
+        if let Ok(template) = std::env::var("MUD_BOOTSTRAP_STDLIB_TEMPLATE") {
+            if !template.trim().is_empty() {
+                self.bootstrap.stdlib_template = template;
+            }
+        }
+
+        if let Ok(templates) = std::env::var("MUD_BOOTSTRAP_AREA_TEMPLATES") {
+            let parsed: Vec<String> = templates
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            if !parsed.is_empty() {
+                self.bootstrap.area_templates = parsed;
+            }
+        }
     }
 
     /// Validate semantic constraints that serde cannot express.
@@ -225,6 +251,26 @@ impl Default for DatabaseConfig {
             driver_db: "mud_driver".into(),
             stdlib_db: "mud_stdlib".into(),
             encryption_key: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct BootstrapConfig {
+    pub stdlib_template: String,
+    pub area_templates: Vec<String>,
+}
+
+impl Default for BootstrapConfig {
+    fn default() -> Self {
+        Self {
+            stdlib_template: "ruby".into(),
+            area_templates: Vec::new(),
         }
     }
 }
@@ -556,6 +602,35 @@ adapters:
             cfg.adapters.default_template.as_deref(),
             Some("kotlin:ktor")
         );
+    }
+
+    #[test]
+    fn parses_bootstrap_config() {
+        let yaml = r#"
+bootstrap:
+  stdlib_template: ruby
+  area_templates:
+    - default
+    - lpc
+"#;
+        let cfg = Config::from_yaml(yaml).unwrap();
+        assert_eq!(cfg.bootstrap.stdlib_template, "ruby");
+        assert_eq!(cfg.bootstrap.area_templates, vec!["default", "lpc"]);
+    }
+
+    #[test]
+    fn env_overrides_bootstrap_values() {
+        std::env::set_var("MUD_BOOTSTRAP_STDLIB_TEMPLATE", "custom");
+        std::env::set_var("MUD_BOOTSTRAP_AREA_TEMPLATES", "default,lpc");
+
+        let mut cfg = Config::default();
+        cfg.apply_env_overrides();
+
+        assert_eq!(cfg.bootstrap.stdlib_template, "custom");
+        assert_eq!(cfg.bootstrap.area_templates, vec!["default", "lpc"]);
+
+        std::env::remove_var("MUD_BOOTSTRAP_STDLIB_TEMPLATE");
+        std::env::remove_var("MUD_BOOTSTRAP_AREA_TEMPLATES");
     }
 
     #[test]

@@ -14,12 +14,12 @@
 ENV["BUNDLE_GEMFILE"] ||= File.expand_path("../Gemfile", __dir__)
 require "bundler/setup"
 
-require_relative "../lib/mud_adapter/stdlib/portal/base_app"
-require_relative "../lib/mud_adapter/stdlib/portal/account_app"
-require_relative "../lib/mud_adapter/stdlib/portal/editor_app"
-require_relative "../lib/mud_adapter/stdlib/portal/git_app"
-require_relative "../lib/mud_adapter/stdlib/portal/review_app"
-require_relative "../lib/mud_adapter/stdlib/portal/play_app"
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/base_app", __dir__)
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/account_app", __dir__)
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/editor_app", __dir__)
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/git_app", __dir__)
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/review_app", __dir__)
+require File.expand_path("../../../bootstrap/ruby/stdlib/portal/play_app", __dir__)
 
 module PortalBaseAppTest
   FAILURES = []

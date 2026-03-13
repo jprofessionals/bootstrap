@@ -155,12 +155,12 @@ module MudAdapter
         end
 
         def check_repo_access!(namespace, name, level = :read_only)
-          allowed = mop_client&.send_driver_request('repo_check_access', {
+          allowed = MudAdapter::Stdlib::System::AccessControl.repo_access_allowed?(
             username: current_account,
             namespace: namespace,
             name: name,
             level: level.to_s
-          })
+          )
           return if allowed
 
           response.status = 403

@@ -39,10 +39,6 @@ module MudAdapter
 
       start_web_server
 
-      # Send area template in a background thread — it needs the message
-      # loop to dispatch the response, so it can't run synchronously here.
-      Thread.new { send_area_template }
-
       trap("INT") { @running = false }
       trap("TERM") { @running = false }
 
@@ -138,8 +134,14 @@ module MudAdapter
       when "check_builder_access"
         handle_check_builder_access(msg)
 
+      when "check_repo_access"
+        handle_check_repo_access(msg)
+
       when "get_web_data"
         handle_get_web_data(msg)
+
+      when "reload_stdlib"
+        handle_reload_stdlib(msg)
 
       else
         log("Unknown message type: #{type.inspect}")
@@ -161,44 +163,20 @@ module MudAdapter
 
     def handle_configure(msg)
       stdlib_db_url = msg["stdlib_db_url"]
+      MudAdapter::StdlibRuntime.refresh_from_world!
       if stdlib_db_url
         log("Received stdlib DB URL, running migrations...")
         MudAdapter::Stdlib::StdlibMigrator.run!(stdlib_db_url)
+        connect_stdlib_db(stdlib_db_url)
         log("Stdlib migrations complete.")
       end
     end
 
-    # Send the area template files to the driver so it can seed new
-    # repositories with them. The template lives in the stdlib and can
-    # be updated without recompiling the driver.
-    #
-    # NOTE: This must NOT be called from handle_configure (which runs on
-    # the main message loop thread during process_early_messages).
-    # send_driver_request blocks waiting for a response that can only be
-    # read by the same thread — causing a deadlock. Instead, this is
-    # called from run() after process_early_messages returns, when the
-    # message loop is running in the background.
+    # Legacy migration path kept only for compatibility during the refactor.
+    # Runtime bootstrap now comes from bootstrap/* and system/template_* repos,
+    # so adapters no longer publish live templates to the driver.
     def send_area_template
-      template_dir = File.expand_path("../lib/mud_adapter/stdlib/templates/area", __dir__)
-      unless File.directory?(template_dir)
-        log("Warning: area template directory not found: #{template_dir}")
-        return
-      end
-
-      files = {}
-      Dir.glob("#{template_dir}/**/*", File::FNM_DOTMATCH).each do |path|
-        next unless File.file?(path)
-        # Skip dev tooling (bin/, dev/) — these are for standalone development
-        rel = path.sub("#{template_dir}/", "")
-        next if rel.start_with?("bin/") || rel.start_with?("dev/")
-        files[rel] = File.read(path)
-      end
-
-      log("Sending area template (#{files.size} files) to driver...")
-      @client.send_driver_request("set_area_template", { "files" => files })
-      log("Area template sent.")
-    rescue StandardError => e
-      log("Warning: failed to send area template: #{e.message}")
+      log("Template publish disabled; using bootstrap/system template repos instead.")
     end
 
     def handle_call(msg)
@@ -245,6 +223,28 @@ module MudAdapter
           "error" => "check_builder_access failed: #{e.class}: #{e.message}"
         )
       end
+    end
+
+    def handle_check_repo_access(msg)
+      request_id = msg["request_id"]
+      allowed = MudAdapter::Stdlib::System::AccessControl.repo_access_allowed?(
+        username: msg["username"],
+        namespace: msg["namespace"],
+        name: msg["name"],
+        level: msg["level"]
+      )
+
+      @client.send_message(
+        "type" => "call_result",
+        "request_id" => request_id,
+        "result" => allowed
+      )
+    rescue StandardError => e
+      @client.send_message(
+        "type" => "call_error",
+        "request_id" => request_id,
+        "error" => "check_repo_access failed: #{e.class}: #{e.message}"
+      )
     end
 
     # Handle a get_web_data request from the driver.
@@ -317,12 +317,32 @@ module MudAdapter
       end
     end
 
+    def handle_reload_stdlib(msg)
+      subsystem = (msg["subsystem"] || "all").to_sym
+      MudAdapter::StdlibRuntime.refresh_from_world!
+      MudAdapter::StdlibRuntime.reload!(subsystem)
+      MudAdapter::Stdlib::Portal::BaseApp.views_dir = MudAdapter::StdlibRuntime.views_dir
+      log("Reloaded stdlib subsystem=#{subsystem}")
+    rescue StandardError => e
+      log("stdlib reload failed: #{e.class}: #{e.message}")
+    end
+
     def log(message)
       $stderr.puts("[mud-adapter] #{message}")
     end
 
     def portal_server_name
       MudAdapter::Stdlib::Portal::BaseApp.server_name_value || "MUD Driver"
+    end
+
+    def connect_stdlib_db(stdlib_db_url)
+      require "sequel"
+
+      existing = MUD::Container["database.stdlib"]
+      existing&.disconnect if existing
+      MUD::Container["database.stdlib"] = Sequel.connect(stdlib_db_url)
+    rescue StandardError => e
+      log("Warning: failed to connect stdlib DB: #{e.class}: #{e.message}")
     end
   end
 end

@@ -12,9 +12,10 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::git::repo_manager::{AccessLevel, RepoManager};
+use crate::mop_rpc::MopRpcClient;
 use crate::persistence::player_store::{AuthResult, PlayerStore};
-use crate::web::build_manager::BuildManager;
 use crate::web::server::AppState;
+use mud_mop::message::{DriverMessage, Value};
 
 // ---------------------------------------------------------------------------
 // Route construction
@@ -133,8 +134,9 @@ async fn authenticate(
 ///
 /// Returns 404 if the repo does not exist, 403 if the user lacks permission.
 #[allow(clippy::result_large_err)]
-fn check_acl(
+async fn check_acl(
     repo_manager: &Arc<RepoManager>,
+    mop_rpc: Option<&MopRpcClient>,
     username: &str,
     ns: &str,
     name: &str,
@@ -144,7 +146,15 @@ fn check_acl(
         return Err(StatusCode::NOT_FOUND.into_response());
     }
 
-    if !repo_manager.can_access(username, ns, name, level) {
+    let allowed = if let Some(mop_rpc) = mop_rpc {
+        check_acl_via_stdlib(mop_rpc, username, ns, name, level)
+            .await
+            .unwrap_or(false)
+    } else {
+        repo_manager.can_access(username, ns, name, level)
+    };
+
+    if !allowed {
         return Err(StatusCode::FORBIDDEN.into_response());
     }
 
@@ -215,7 +225,15 @@ async fn info_refs_handler(
     } else {
         AccessLevel::ReadOnly
     };
-    check_acl(&state.repo_manager, &username, ns, name, &required_level)?;
+    check_acl(
+        &state.repo_manager,
+        state.mop_rpc.as_ref(),
+        &username,
+        ns,
+        name,
+        &required_level,
+    )
+    .await?;
 
     // Open the bare repository.
     let disk_path = state.repo_manager.repo_path(ns, name);
@@ -506,7 +524,15 @@ async fn run_service(
     let username = authenticate(headers, &state.player_store).await?;
 
     // ACL check.
-    check_acl(&state.repo_manager, &username, ns, name, required_level)?;
+    check_acl(
+        &state.repo_manager,
+        state.mop_rpc.as_ref(),
+        &username,
+        ns,
+        name,
+        required_level,
+    )
+    .await?;
 
     // Resolve repo path on disk.
     let repo_disk_path = state.repo_manager.repo_path(ns, name);
@@ -567,25 +593,13 @@ async fn run_service(
     // After a successful receive-pack (push), trigger SPA builds if applicable.
     // We don't know which branch was pushed, so rebuild both production and @dev.
     if service_name == "git-receive-pack" && status.success() {
-        if let Some(ref build_manager) = state.build_manager {
-            // Production (main branch)
-            let _ = state.workspace.pull(ns, name, "main");
-            let area_path = state.workspace.workspace_path(ns, name);
-            if BuildManager::is_spa(&area_path) {
-                let base_url = format!("/project/{ns}/{name}/");
-                let area_key = format!("{ns}/{name}");
-                build_manager.trigger_build(area_key, area_path, base_url);
-            }
-
-            // Development (@dev branch)
-            let _ = state.workspace.pull(ns, name, "develop");
-            let dev_path = state.workspace.dev_path(ns, name);
-            if BuildManager::is_spa(&dev_path) {
-                let base_url = format!("/project/{ns}/{name}@dev/");
-                let area_key = format!("{ns}/{name}@dev");
-                build_manager.trigger_build(area_key, dev_path, base_url);
-            }
-        }
+        let _ = state
+            .server_commands
+            .send(crate::server::ServerCommand::RepoUpdated {
+                namespace: ns.to_string(),
+                name: name.to_string(),
+            })
+            .await;
     }
 
     let content_type = format!("application/x-{}-result", service_name);
@@ -598,4 +612,37 @@ async fn run_service(
         stdout_data,
     )
         .into_response())
+}
+
+async fn check_acl_via_stdlib(
+    mop_rpc: &MopRpcClient,
+    username: &str,
+    ns: &str,
+    name: &str,
+    level: &AccessLevel,
+) -> Option<bool> {
+    let level = match level {
+        AccessLevel::ReadOnly => "read_only",
+        AccessLevel::ReadWrite => "read_write",
+    };
+
+    let value = mop_rpc
+        .call(DriverMessage::CheckRepoAccess {
+            request_id: 0,
+            username: username.to_string(),
+            namespace: ns.to_string(),
+            name: name.to_string(),
+            level: level.to_string(),
+        })
+        .await
+        .ok()?;
+
+    match value {
+        Value::Bool(allowed) => Some(allowed),
+        Value::Map(map) => match map.get("allowed") {
+            Some(Value::Bool(allowed)) => Some(*allowed),
+            _ => None,
+        },
+        _ => None,
+    }
 }

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use mud_core::types::AreaId;
 use mud_mop::message::{AdapterMessage, DriverMessage, Value};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -12,6 +14,35 @@ use tracing::{error, info, warn};
 /// Outer key is template name (e.g. "default", "kotlin:ktor"), inner keys
 /// are file paths with `{{namespace}}` / `{{area_name}}` placeholders.
 pub type AreaTemplates = Arc<RwLock<HashMap<String, HashMap<String, String>>>>;
+
+/// Thread-safe, shared registry of template repos discovered under `system/`.
+pub type TemplateRegistry = Arc<RwLock<HashMap<String, RegisteredTemplate>>>;
+
+#[derive(Debug, Clone)]
+pub struct RegisteredTemplate {
+    pub name: String,
+    pub repo_namespace: String,
+    pub repo_name: String,
+    pub path: PathBuf,
+    pub metadata: TemplateMetadata,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TemplateMetadata {
+    pub name: String,
+    pub kind: String,
+    pub language: String,
+    #[serde(default)]
+    pub framework: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub stdlib_compatible: Option<bool>,
+}
 
 use crate::config::Config;
 use crate::git::merge_request_manager::MergeRequestManager;
@@ -23,12 +54,20 @@ use crate::persistence::credential_encryptor::CredentialEncryptor;
 use crate::persistence::database_manager::DatabaseManager;
 use crate::persistence::player_store::{AuthResult, PlayerStore};
 use crate::runtime::adapter_manager::{AdapterManager, SourcedMessage};
+use crate::runtime::object_broker::ObjectBroker;
+use crate::runtime::state_store::StateStore;
+use crate::runtime::version_tree::VersionTree;
 use crate::ssh::handler::SshCommand;
 use crate::ssh::server::start_ssh_server;
 use crate::web::build_log::BuildLog;
 use crate::web::build_manager::BuildManager;
 use crate::web::server::{init_templates, AppState, WebServer};
 use crate::web::skills::SkillsService;
+
+#[derive(Debug, Clone)]
+pub enum ServerCommand {
+    RepoUpdated { namespace: String, name: String },
+}
 
 // ---------------------------------------------------------------------------
 // SessionState — tracks active player sessions
@@ -105,6 +144,8 @@ pub struct Server {
     merge_request_manager: Option<Arc<MergeRequestManager>>,
     /// Area template registry, shared with the web layer for the repos API.
     area_templates: AreaTemplates,
+    /// System template registry backed by `system/template_*` repos.
+    template_registry: TemplateRegistry,
     /// Per-area web socket paths for API proxying in SPA mode.
     /// Shared with the HTTP server for live routing updates.
     area_web_sockets: crate::web::project::AreaWebSockets,
@@ -128,6 +169,16 @@ pub struct Server {
     pending_rpc: HashMap<u64, oneshot::Sender<Result<Value, String>>>,
     /// Counter for assigning unique request IDs to MOP RPC calls.
     next_rpc_id: u64,
+    /// Internal driver command receiver used by web handlers to notify the main loop.
+    server_command_rx: Option<mpsc::Receiver<ServerCommand>>,
+    /// Sender for internal driver commands.
+    server_command_tx: mpsc::Sender<ServerCommand>,
+    /// Runtime dependency graph used for selective reload propagation.
+    version_tree: Arc<RwLock<VersionTree>>,
+    /// Driver-owned object state for cache invalidation and future reload precision.
+    state_store: Arc<RwLock<StateStore>>,
+    /// Cached call broker; invalidated on affected program reloads.
+    object_broker: Arc<RwLock<ObjectBroker>>,
 }
 
 impl Server {
@@ -157,6 +208,7 @@ impl Server {
         // Create the MOP RPC channel for web-handler-to-adapter communication.
         let (mop_rpc_tx, mop_rpc_rx) = mpsc::channel::<MopRequest>(32);
         let mop_rpc_client = MopRpcClient::new(mop_rpc_tx);
+        let (server_command_tx, server_command_rx) = mpsc::channel::<ServerCommand>(64);
 
         Self {
             config,
@@ -171,6 +223,7 @@ impl Server {
             workspace: None,
             merge_request_manager: None,
             area_templates: Arc::new(RwLock::new(HashMap::new())),
+            template_registry: Arc::new(RwLock::new(HashMap::new())),
             area_web_sockets: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             loaded_areas: Arc::new(RwLock::new(std::collections::HashSet::new())),
             web_handle: None,
@@ -181,6 +234,11 @@ impl Server {
             mop_rpc_client: Some(mop_rpc_client),
             pending_rpc: HashMap::new(),
             next_rpc_id: 1_000_000, // Start high to avoid collisions with adapter request IDs
+            server_command_rx: Some(server_command_rx),
+            server_command_tx,
+            version_tree: Arc::new(RwLock::new(VersionTree::new())),
+            state_store: Arc::new(RwLock::new(StateStore::new())),
+            object_broker: Arc::new(RwLock::new(ObjectBroker::new())),
         }
     }
 
@@ -239,12 +297,15 @@ impl Server {
         // sent their templates during the handshake above, so we only
         // insert templates that aren't already registered.
         // -----------------------------------------------------------------
-        self.scan_disk_templates().await;
+        if !self.system_templates_exist() {
+            self.scan_disk_templates().await;
+        }
 
         // -----------------------------------------------------------------
         // Database setup (optional — requires admin_password)
         // -----------------------------------------------------------------
         self.setup_database().await?;
+        self.refresh_template_registry().await?;
 
         // -----------------------------------------------------------------
         // Web server (optional — requires http.enabled)
@@ -292,7 +353,9 @@ impl Server {
                     mop_rpc: self.mop_rpc_client.clone(),
                     area_web_sockets: Arc::clone(&self.area_web_sockets),
                     area_templates: Arc::clone(&self.area_templates),
+                    template_registry: Arc::clone(&self.template_registry),
                     loaded_areas: Arc::clone(&self.loaded_areas),
+                    server_commands: self.server_command_tx.clone(),
                 };
 
                 let web_server = WebServer::new(self.config.http.clone(), state);
@@ -353,10 +416,13 @@ impl Server {
             return Err(anyhow::anyhow!("no adapter connected — cannot load areas"));
         }
 
+        self.ensure_runtime_dependency_roots().await;
         let areas = discover_areas(&self.config.world.resolved_path().to_string_lossy())?;
 
         for (area_id, area_path) in &areas {
             let language = self.language_for_area(area_path);
+            self.register_area_runtime_dependencies(area_id, area_path, &language)
+                .await;
             info!(%area_id, path = %area_path, %language, "Loading area");
 
             // Provision per-area database (idempotent)
@@ -586,6 +652,9 @@ impl Server {
     pub async fn send_load_area(&self, area_id: AreaId, path: String) -> Result<()> {
         if !self.adapter_languages.is_empty() {
             let lang = self.language_for_area(&path);
+            self.ensure_runtime_dependency_roots().await;
+            self.register_area_runtime_dependencies(&area_id, &path, &lang)
+                .await;
             let db_url = if let Some(ref db_mgr) = self.db_manager {
                 if let Err(e) = db_mgr
                     .provision_area_db(&area_id.namespace, &area_id.name)
@@ -647,21 +716,6 @@ impl Server {
             .await
             .context("initializing database manager")?;
 
-        // Send stdlib DB URL to the adapter immediately after databases are
-        // created so it can run its Sequel migrations concurrently with the
-        // driver migrations below.
-        let admin_password = self.config.database.admin_password.as_deref().unwrap_or("");
-        let stdlib_db_url = format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.config.database.admin_user,
-            admin_password,
-            self.config.database.host,
-            self.config.database.port,
-            self.config.database.stdlib_db,
-        );
-        self.send_configure(stdlib_db_url).await?;
-        info!("Sent stdlib DB URL to adapter");
-
         db_manager
             .setup()
             .await
@@ -704,7 +758,185 @@ impl Server {
 
         info!("PlayerStore, RepoManager, Workspace, and MergeRequestManager initialized");
 
+        self.ensure_system_repos().await?;
+
+        // Send stdlib DB URL to the adapter after the system stdlib repo has
+        // been provisioned and checked out so the adapter can switch to it
+        // during configure handling.
+        let admin_password = self.config.database.admin_password.as_deref().unwrap_or("");
+        let stdlib_db_url = format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.config.database.admin_user,
+            admin_password,
+            self.config.database.host,
+            self.config.database.port,
+            self.config.database.stdlib_db,
+        );
+        self.send_configure(stdlib_db_url).await?;
+        info!("Sent stdlib DB URL to adapter");
+
         Ok(())
+    }
+
+    async fn ensure_system_repos(&self) -> Result<()> {
+        let Some(repo_manager) = &self.repo_manager else {
+            return Ok(());
+        };
+        let Some(workspace) = &self.workspace else {
+            return Ok(());
+        };
+
+        if !repo_manager.repo_exists("system", "stdlib") {
+            let stdlib_files = self.bootstrap_stdlib_files()?;
+            repo_manager
+                .create_repo("system", "stdlib", true, Some(&stdlib_files))
+                .context("bootstrapping system/stdlib repo")?;
+        }
+        workspace
+            .checkout("system", "stdlib")
+            .context("checking out system/stdlib")?;
+
+        let template_names = self.bootstrap_template_names();
+        for template_name in template_names {
+            let repo_name = template_repo_name(&template_name);
+            if !repo_manager.repo_exists("system", &repo_name) {
+                match self.bootstrap_template_files(&template_name).await {
+                    Ok(files) => {
+                        if let Err(e) =
+                            repo_manager.create_repo("system", &repo_name, true, Some(&files))
+                        {
+                            warn!(
+                                template = %template_name,
+                                repo = %repo_name,
+                                error = %e,
+                                "failed to bootstrap system template repo"
+                            );
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            template = %template_name,
+                            repo = %repo_name,
+                            error = %e,
+                            "failed to load bootstrap template files"
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            if let Err(e) = workspace.checkout("system", &repo_name) {
+                warn!(
+                    template = %template_name,
+                    repo = %repo_name,
+                    error = %e,
+                    "failed to checkout system template repo"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn system_templates_exist(&self) -> bool {
+        let system_dir = self.config.world.resolved_path().join("system");
+        if !system_dir.is_dir() {
+            return false;
+        }
+        match std::fs::read_dir(system_dir) {
+            Ok(entries) => entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| name.starts_with("template_"))
+                    .unwrap_or(false)
+            }),
+            Err(_) => false,
+        }
+    }
+
+    async fn refresh_template_registry(&self) -> Result<()> {
+        let Some(workspace) = &self.workspace else {
+            return Ok(());
+        };
+
+        let system_path = workspace.world_path().join("system");
+        let mut discovered = HashMap::new();
+        if system_path.is_dir() {
+            for entry in std::fs::read_dir(&system_path)
+                .with_context(|| format!("reading {}", system_path.display()))?
+            {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(repo_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if !repo_name.starts_with("template_") {
+                    continue;
+                }
+                let metadata_path = path.join("template.yml");
+                if !metadata_path.is_file() {
+                    continue;
+                }
+                let contents = std::fs::read_to_string(&metadata_path)
+                    .with_context(|| format!("reading {}", metadata_path.display()))?;
+                let metadata: TemplateMetadata = serde_yaml::from_str(&contents)
+                    .with_context(|| format!("parsing {}", metadata_path.display()))?;
+                discovered.insert(
+                    metadata.name.clone(),
+                    RegisteredTemplate {
+                        name: metadata.name.clone(),
+                        repo_namespace: "system".into(),
+                        repo_name: repo_name.to_string(),
+                        path: path.clone(),
+                        metadata,
+                    },
+                );
+            }
+        }
+
+        *self.template_registry.write().await = discovered;
+        Ok(())
+    }
+
+    fn bootstrap_template_names(&self) -> Vec<String> {
+        if !self.config.bootstrap.area_templates.is_empty() {
+            return self.config.bootstrap.area_templates.clone();
+        }
+
+        vec![
+            "default".into(),
+            "lpc".into(),
+            "rust".into(),
+            "kotlin:ktor".into(),
+            "kotlin:quarkus".into(),
+            "kotlin:spring-boot".into(),
+        ]
+    }
+
+    fn bootstrap_stdlib_files(&self) -> Result<HashMap<String, String>> {
+        match self.config.bootstrap.stdlib_template.as_str() {
+            "ruby" => Ok(with_stdlib_metadata_file(collect_template_files(Path::new(
+                "bootstrap/ruby/stdlib",
+            ))?)),
+            other => Err(anyhow::anyhow!(
+                "unsupported bootstrap stdlib template: {}",
+                other
+            )),
+        }
+    }
+
+    async fn bootstrap_template_files(&self, template_name: &str) -> Result<HashMap<String, String>> {
+        if let Some(files) = self.area_templates.read().await.get(template_name).cloned() {
+            return Ok(with_template_metadata_file(template_name, files));
+        }
+
+        let disk_files = scan_disk_template_by_name(template_name)?;
+        Ok(with_template_metadata_file(template_name, disk_files))
     }
 
     /// Return a reference to the PlayerStore, if initialized.
@@ -736,6 +968,10 @@ impl Server {
             .mop_rpc_rx
             .take()
             .unwrap_or_else(|| mpsc::channel::<MopRequest>(1).1);
+        let mut server_command_rx = self
+            .server_command_rx
+            .take()
+            .unwrap_or_else(|| mpsc::channel::<ServerCommand>(1).1);
 
         loop {
             tokio::select! {
@@ -748,6 +984,9 @@ impl Server {
                 Some(rpc_req) = mop_rpc_rx.recv() => {
                     self.handle_mop_rpc_request(rpc_req).await;
                 }
+                Some(cmd) = server_command_rx.recv() => {
+                    self.handle_server_command(cmd).await;
+                }
                 else => {
                     info!("Event loop: all channels closed, shutting down");
                     break;
@@ -756,6 +995,16 @@ impl Server {
         }
         self.adapter_manager.shutdown();
         Ok(())
+    }
+
+    async fn handle_server_command(&self, cmd: ServerCommand) {
+        match cmd {
+            ServerCommand::RepoUpdated { namespace, name } => {
+                if let Err(e) = self.handle_repo_updated(&namespace, &name, None).await {
+                    warn!(namespace = %namespace, name = %name, error = %e, "repo update handling failed");
+                }
+            }
+        }
     }
 
     /// Handle a MOP RPC request submitted by a web handler.
@@ -936,6 +1185,8 @@ impl Server {
         match action {
             "repo_create" => return self.handle_repo_create(request_id, params).await,
             "repo_list" => return self.handle_repo_list(request_id, params).await,
+            "repo_grant" => return self.handle_repo_grant(request_id, params).await,
+            "repo_revoke" => return self.handle_repo_revoke(request_id, params).await,
             "repo_check_access" => return self.handle_repo_check_access(request_id, params).await,
             "area_reload" => return self.handle_area_reload(request_id, params).await,
             "workspace_diff" => return self.handle_workspace_diff(request_id, params).await,
@@ -1122,16 +1373,28 @@ impl Server {
 
         // Create a default git area for the new builder account.
         if let Some(rm) = &self.repo_manager {
-            let templates = self.area_templates.read().await;
-            let template = self
-                .config
-                .adapters
-                .default_template
-                .as_ref()
-                .and_then(|name| templates.get(name))
-                .or_else(|| templates.get("default"))
-                .or_else(|| templates.values().next());
-            if let Err(e) = rm.create_repo(&username, &username, true, template) {
+            let template_name = self.config.adapters.default_template.as_deref().unwrap_or("default");
+            let template_registry = self.template_registry.read().await;
+            let create_result = if let Some(template) = template_registry
+                .get(template_name)
+                .or_else(|| template_registry.get("default"))
+                .or_else(|| template_registry.values().next())
+            {
+                rm.create_repo_from_template_repo(&username, &username, &template.path, "main")
+            } else {
+                let templates = self.area_templates.read().await;
+                let template = self
+                    .config
+                    .adapters
+                    .default_template
+                    .as_ref()
+                    .and_then(|name| templates.get(name))
+                    .or_else(|| templates.get("default"))
+                    .or_else(|| templates.values().next());
+                rm.create_repo(&username, &username, true, template)
+            };
+            drop(template_registry);
+            if let Err(e) = create_result {
                 warn!(%e, "failed to create default area for new account");
             } else if let Some(ws) = &self.workspace {
                 if let Err(e) = ws.checkout(&username, &username) {
@@ -1422,6 +1685,13 @@ impl Server {
     /// Store the area template files provided by the adapter.
     /// The adapter sends a map of `{ "files": { "path": "content", ... } }`.
     async fn handle_set_area_template(&self, request_id: u64, params: Value) -> DriverMessage {
+        if !self.template_registry.read().await.is_empty() || self.system_templates_exist() {
+            return DriverMessage::RequestResponse {
+                request_id,
+                result: Value::Bool(true),
+            };
+        }
+
         let (name, files) = match &params {
             Value::Map(m) => {
                 let name = match m.get("name") {
@@ -1468,9 +1738,30 @@ impl Server {
     /// that weren't already provided by a running adapter.  This ensures
     /// templates are available in the UI even when an adapter is disabled.
     async fn scan_disk_templates(&self) {
-        // JVM templates: base + overlays in adapters/jvm/stdlib/templates/area/
-        let jvm_base = std::path::Path::new("adapters/jvm/stdlib/templates/area/base");
-        let jvm_overlays = std::path::Path::new("adapters/jvm/stdlib/templates/area/overlays");
+        // Ruby default template
+        let ruby_default = std::path::Path::new("bootstrap/ruby/stdlib/templates/area");
+        if ruby_default.is_dir() {
+            let existing = self.area_templates.read().await;
+            let needs_insert = !existing.contains_key("default");
+            drop(existing);
+            if needs_insert {
+                match collect_template_files(ruby_default) {
+                    Ok(files) => {
+                        let count = files.len();
+                        info!(name = "default", count, "Disk-scanned area template registered");
+                        self.area_templates
+                            .write()
+                            .await
+                            .insert("default".into(), files);
+                    }
+                    Err(e) => warn!(error = %e, "Failed to read Ruby default template"),
+                }
+            }
+        }
+
+        // JVM templates: base + overlays in bootstrap/jvm/templates/area/
+        let jvm_base = std::path::Path::new("bootstrap/jvm/templates/area/base");
+        let jvm_overlays = std::path::Path::new("bootstrap/jvm/templates/area/overlays");
 
         if jvm_base.is_dir() && jvm_overlays.is_dir() {
             let base_files = match collect_template_files(jvm_base) {
@@ -1523,7 +1814,7 @@ impl Server {
         }
 
         // LPC/Rust templates: each subdirectory is a self-contained template
-        let lpc_templates = std::path::Path::new("adapters/lpc/templates/area");
+        let lpc_templates = std::path::Path::new("bootstrap/lpc/templates/area");
 
         if lpc_templates.is_dir() {
             if let Ok(entries) = std::fs::read_dir(lpc_templates) {
@@ -1634,14 +1925,32 @@ impl Server {
             _ => self.config.adapters.default_template.clone(),
         };
 
-        let templates = self.area_templates.read().await;
-        let template = template_name
-            .as_ref()
-            .and_then(|name| templates.get(name))
-            .or_else(|| templates.get("default"))
-            .or_else(|| templates.values().next());
+        let system_templates = self.template_registry.read().await;
+        let result = if !system_templates.is_empty() {
+            let template = template_name
+                .as_ref()
+                .and_then(|name| system_templates.get(name))
+                .or_else(|| system_templates.get("default"))
+                .or_else(|| system_templates.values().next());
 
-        match rm.create_repo(&ns, &name, seed, template) {
+            match template {
+                Some(template) => {
+                    rm.create_repo_from_template_repo(&ns, &name, &template.path, "main")
+                }
+                None => Err(anyhow::anyhow!("no templates available")),
+            }
+        } else {
+            let templates = self.area_templates.read().await;
+            let template = template_name
+                .as_ref()
+                .and_then(|name| templates.get(name))
+                .or_else(|| templates.get("default"))
+                .or_else(|| templates.values().next());
+
+            rm.create_repo(&ns, &name, seed, template)
+        };
+
+        match result {
             Ok(()) => DriverMessage::RequestResponse {
                 request_id,
                 result: Value::Bool(true),
@@ -1739,6 +2048,116 @@ impl Server {
         }
     }
 
+    async fn handle_repo_grant(&self, request_id: u64, params: Value) -> DriverMessage {
+        let rm = match &self.repo_manager {
+            Some(rm) => rm,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "repo_manager not configured".into(),
+                };
+            }
+        };
+
+        let namespace = match get_string_param(&params, "namespace")
+            .or_else(|| get_string_param(&params, "owner"))
+        {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'namespace' (or 'owner') parameter".into(),
+                };
+            }
+        };
+        let name = match get_string_param(&params, "name") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'name' parameter".into(),
+                };
+            }
+        };
+        let target_user = match get_string_param(&params, "target_user") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'target_user' parameter".into(),
+                };
+            }
+        };
+        let level = match get_string_param(&params, "level").as_deref() {
+            Some("read_write") => crate::git::AccessLevel::ReadWrite,
+            _ => crate::git::AccessLevel::ReadOnly,
+        };
+
+        match rm.grant_access(&namespace, &name, &target_user, level) {
+            Ok(()) => DriverMessage::RequestResponse {
+                request_id,
+                result: Value::Bool(true),
+            },
+            Err(e) => DriverMessage::RequestError {
+                request_id,
+                error: format!("failed to grant repo access: {}", e),
+            },
+        }
+    }
+
+    async fn handle_repo_revoke(&self, request_id: u64, params: Value) -> DriverMessage {
+        let rm = match &self.repo_manager {
+            Some(rm) => rm,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "repo_manager not configured".into(),
+                };
+            }
+        };
+
+        let namespace = match get_string_param(&params, "namespace")
+            .or_else(|| get_string_param(&params, "owner"))
+        {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'namespace' (or 'owner') parameter".into(),
+                };
+            }
+        };
+        let name = match get_string_param(&params, "name") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'name' parameter".into(),
+                };
+            }
+        };
+        let target_user = match get_string_param(&params, "target_user") {
+            Some(v) => v,
+            None => {
+                return DriverMessage::RequestError {
+                    request_id,
+                    error: "missing 'target_user' parameter".into(),
+                };
+            }
+        };
+
+        match rm.revoke_access(&namespace, &name, &target_user) {
+            Ok(()) => DriverMessage::RequestResponse {
+                request_id,
+                result: Value::Bool(true),
+            },
+            Err(e) => DriverMessage::RequestError {
+                request_id,
+                error: format!("failed to revoke repo access: {}", e),
+            },
+        }
+    }
+
     /// Reload an area by sending ReloadArea to the appropriate adapter.
     async fn handle_area_reload(&self, request_id: u64, params: Value) -> DriverMessage {
         if self.adapter_languages.is_empty() {
@@ -1811,6 +2230,238 @@ impl Server {
                 error: format!("failed to send reload: {}", e),
             },
         }
+    }
+
+    async fn handle_repo_updated(
+        &self,
+        namespace: &str,
+        name: &str,
+        committed_branch: Option<(&str, &[crate::git::workspace::DiffEntry])>,
+    ) -> Result<()> {
+        let ws = match &self.workspace {
+            Some(ws) => ws,
+            None => return Ok(()),
+        };
+
+        if namespace == "system" && name == "stdlib" {
+            let changed = if let Some((branch, entries)) = committed_branch {
+                if branch != "main" {
+                    return Ok(());
+                }
+                entries.iter().map(|entry| entry.path.clone()).collect::<Vec<_>>()
+            } else {
+                ws.pull_with_changed_files(namespace, name, "main")?
+                    .into_iter()
+                    .map(|entry| entry.path)
+                    .collect::<Vec<_>>()
+            };
+
+            if changed.is_empty() {
+                return Ok(());
+            }
+
+            let subsystem = classify_stdlib_subsystem(&changed);
+            self.adapter_manager.send_to(
+                self.primary_language(),
+                DriverMessage::ReloadStdlib {
+                    subsystem: subsystem.to_string(),
+                },
+            ).await?;
+
+            self.propagate_stdlib_reload(&changed).await?;
+            return Ok(());
+        }
+
+        if let Some((branch, entries)) = committed_branch {
+            self.handle_area_branch_update(namespace, name, branch, entries).await?;
+            return Ok(());
+        }
+
+        let main_changes = ws.pull_with_changed_files(namespace, name, "main")?;
+        self.handle_area_branch_update(namespace, name, "main", &main_changes)
+            .await?;
+
+        let develop_changes = ws.pull_with_changed_files(namespace, name, "develop")?;
+        self.handle_area_branch_update(namespace, name, "develop", &develop_changes)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_area_branch_update(
+        &self,
+        namespace: &str,
+        name: &str,
+        branch: &str,
+        changes: &[crate::git::workspace::DiffEntry],
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let ws = match &self.workspace {
+            Some(ws) => ws,
+            None => return Ok(()),
+        };
+
+        let area_path = if branch == "develop" {
+            ws.dev_path(namespace, name)
+        } else {
+            ws.workspace_path(namespace, name)
+        };
+
+        self.trigger_spa_build(namespace, name, branch, &area_path);
+
+        let area_path_str = area_path.to_string_lossy().to_string();
+        if !std::path::Path::new(&area_path_str).join(".meta.yml").exists() {
+            return Ok(());
+        }
+
+        let area_id = AreaId::new(namespace, name);
+        self.send_area_reload(area_id, area_path_str).await
+    }
+
+    fn trigger_spa_build(&self, namespace: &str, name: &str, branch: &str, area_path: &Path) {
+        let Some(build_manager) = &self.build_manager else {
+            return;
+        };
+
+        let (area_key, base_url) = if branch == "develop" {
+            (
+                format!("{namespace}/{name}@dev"),
+                format!("/project/{namespace}/{name}@dev/"),
+            )
+        } else {
+            (
+                format!("{namespace}/{name}"),
+                format!("/project/{namespace}/{name}/"),
+            )
+        };
+
+        if BuildManager::is_spa(area_path) {
+            build_manager.trigger_build(area_key, area_path.to_path_buf(), base_url);
+        }
+    }
+
+    async fn send_area_reload(&self, area_id: AreaId, path: String) -> Result<()> {
+        let language = self.language_for_area(&path);
+        self.ensure_runtime_dependency_roots().await;
+        self.register_area_runtime_dependencies(&area_id, &path, &language)
+            .await;
+        let db_url = if let Some(ref db_mgr) = self.db_manager {
+            if let Err(e) = db_mgr
+                .provision_area_db(&area_id.namespace, &area_id.name)
+                .await
+            {
+                warn!(area = %area_id, error = %e, "failed to provision area database on reload");
+            }
+            db_mgr
+                .get_area_db_url(&area_id.namespace, &area_id.name)
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+
+        self.adapter_manager
+            .send_to(
+                &language,
+                DriverMessage::ReloadArea {
+                    area_id,
+                    path,
+                    db_url,
+                },
+            )
+            .await
+    }
+
+    async fn ensure_runtime_dependency_roots(&self) {
+        let mut tree = self.version_tree.write().await;
+        for (program, deps) in ruby_stdlib_dependency_roots() {
+            if tree.get(program).is_none() {
+                tree.register(program, "ruby", deps);
+            }
+        }
+    }
+
+    async fn register_area_runtime_dependencies(&self, area_id: &AreaId, path: &str, language: &str) {
+        if area_id.namespace == "system" && area_id.name == "stdlib" {
+            return;
+        }
+
+        let deps = area_dependency_paths(path, language);
+        let program_path = area_program_path(area_id);
+        self.version_tree
+            .write()
+            .await
+            .register(&program_path, language, deps);
+    }
+
+    async fn propagate_stdlib_reload(&self, changed_paths: &[String]) -> Result<()> {
+        self.ensure_runtime_dependency_roots().await;
+
+        let affected_programs = {
+            let mut tree = self.version_tree.write().await;
+            let roots = affected_stdlib_roots(changed_paths);
+            let mut affected = std::collections::BTreeSet::new();
+            for root in &roots {
+                let _ = tree.bump_version(root);
+                affected.insert((*root).to_string());
+                for dependent in tree.walk_dependents(root) {
+                    affected.insert(dependent);
+                }
+            }
+            affected
+        };
+
+        let mut reloaded_area_ids = std::collections::BTreeSet::new();
+        let mut invalidated_object_ids = Vec::new();
+        {
+            let mut state_store = self.state_store.write().await;
+            for program in &affected_programs {
+                if !program.starts_with("area:") {
+                    continue;
+                }
+                invalidated_object_ids.extend(state_store.objects_by_program(program));
+                for object_id in state_store.objects_by_program(program) {
+                    if let Some(version) = self
+                        .version_tree
+                        .read()
+                        .await
+                        .version_of(program)
+                    {
+                        state_store.upgrade_program(object_id, version);
+                    }
+                }
+                if let Some(area_id) = parse_area_program_path(program) {
+                    reloaded_area_ids.insert(area_id.to_string());
+                }
+            }
+        }
+
+        if !invalidated_object_ids.is_empty() {
+            self.object_broker
+                .write()
+                .await
+                .invalidate(&invalidated_object_ids);
+        }
+
+        let area_lookup: std::collections::HashMap<_, _> = discover_areas(
+            &self.config.world.resolved_path().to_string_lossy(),
+        )?
+        .into_iter()
+        .map(|(area_id, path)| (area_id.to_string(), path))
+        .collect();
+
+        for area_id in reloaded_area_ids {
+            if let Some(path) = area_lookup.get(&area_id) {
+                if let Some(parsed) = parse_area_program_path(&format!("area:{area_id}")) {
+                    self.send_area_reload(parsed, path.clone()).await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------
@@ -1976,28 +2627,25 @@ impl Server {
 
         match ws.commit(&ns, &name, &author, &message, &branch) {
             Ok(oid) => {
-                // After commit succeeds, trigger SPA build if applicable.
-                // Use @dev path/key for develop branch so the build cache
-                // and vite base URL match the serving URL.
-                if let Some(ref build_manager) = self.build_manager {
-                    let (area_path, area_key, base_url) = if branch == "develop" {
-                        let path = ws.dev_path(&ns, &name);
-                        (
-                            path,
-                            format!("{ns}/{name}@dev"),
-                            format!("/project/{ns}/{name}@dev/"),
-                        )
+                let changed_files = ws
+                    .changed_files_for_commit(&ns, &name, &branch, &oid)
+                    .unwrap_or_default();
+                let repo_update_result = if changed_files.is_empty() && !(ns == "system" && name == "stdlib") {
+                    let area_path = if branch == "develop" {
+                        ws.dev_path(&ns, &name)
                     } else {
-                        let path = ws.workspace_path(&ns, &name);
-                        (
-                            path,
-                            format!("{ns}/{name}"),
-                            format!("/project/{ns}/{name}/"),
-                        )
+                        ws.workspace_path(&ns, &name)
                     };
-                    if BuildManager::is_spa(&area_path) {
-                        build_manager.trigger_build(area_key, area_path, base_url);
+                    if area_path.join(".meta.yml").exists() {
+                        self.send_area_reload(AreaId::new(&ns, &name), area_path.to_string_lossy().to_string()).await
+                    } else {
+                        Ok(())
                     }
+                } else {
+                    self.handle_repo_updated(&ns, &name, Some((&branch, &changed_files))).await
+                };
+                if let Err(e) = repo_update_result {
+                    warn!(namespace = %ns, name = %name, branch = %branch, error = %e, "post-commit repo handling failed");
                 }
                 DriverMessage::RequestResponse {
                     request_id,
@@ -2648,6 +3296,19 @@ fn replace_request_id(msg: DriverMessage, new_id: u64) -> DriverMessage {
             area,
             action,
         },
+        DriverMessage::CheckRepoAccess {
+            username,
+            namespace,
+            name,
+            level,
+            ..
+        } => DriverMessage::CheckRepoAccess {
+            request_id: new_id,
+            username,
+            namespace,
+            name,
+            level,
+        },
         DriverMessage::GetWebData { area_key, .. } => DriverMessage::GetWebData {
             request_id: new_id,
             area_key,
@@ -2682,6 +3343,219 @@ fn get_int_param(params: &Value, key: &str) -> Option<i64> {
     }
 }
 
+fn classify_stdlib_subsystem(paths: &[String]) -> &'static str {
+    let mut world_changed = false;
+    let mut portal_changed = false;
+    let mut shared_changed = false;
+
+    for path in paths {
+        if path.starts_with("portal/") {
+            portal_changed = true;
+        } else if path.starts_with("world/") || path.starts_with("commands/") {
+            world_changed = true;
+        } else {
+            shared_changed = true;
+        }
+    }
+
+    if shared_changed || (world_changed && portal_changed) {
+        "all"
+    } else if portal_changed {
+        "portal"
+    } else if world_changed {
+        "world"
+    } else {
+        "all"
+    }
+}
+
+fn stdlib_program_path(subsystem: &str) -> &'static str {
+    match subsystem {
+        "shared" => "stdlib:ruby:shared",
+        "room" => "stdlib:ruby:world:room",
+        "item" => "stdlib:ruby:world:item",
+        "npc" => "stdlib:ruby:world:npc",
+        "daemon" => "stdlib:ruby:world:daemon",
+        "area" => "stdlib:ruby:world:area",
+        "commands" => "stdlib:ruby:world:commands",
+        "area_web" => "stdlib:ruby:world:area_web",
+        "portal" => "stdlib:ruby:portal",
+        _ => "stdlib:ruby:shared",
+    }
+}
+
+fn ruby_stdlib_dependency_roots() -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        (stdlib_program_path("shared"), vec![]),
+        (
+            stdlib_program_path("room"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("item"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("npc"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("daemon"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("area"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("commands"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("area_web"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+        (
+            stdlib_program_path("portal"),
+            vec![stdlib_program_path("shared").to_string()],
+        ),
+    ]
+}
+
+fn stdlib_roots_for_paths(paths: &[String]) -> std::collections::BTreeSet<&'static str> {
+    let mut roots = std::collections::BTreeSet::new();
+
+    for path in paths {
+        match path.as_str() {
+            "world/room.rb" => {
+                roots.insert(stdlib_program_path("room"));
+            }
+            "world/item.rb" => {
+                roots.insert(stdlib_program_path("item"));
+            }
+            "world/npc.rb" => {
+                roots.insert(stdlib_program_path("npc"));
+            }
+            "world/daemon.rb" => {
+                roots.insert(stdlib_program_path("daemon"));
+            }
+            "world/area.rb" => {
+                roots.insert(stdlib_program_path("area"));
+            }
+            "world/review_policy.rb" | "commands/command.rb" | "commands/parser.rb"
+            | "commands/builder.rb" => {
+                roots.insert(stdlib_program_path("commands"));
+            }
+            "world/web_data_helpers.rb" => {
+                roots.insert(stdlib_program_path("area_web"));
+            }
+            "web/rack_app.rb" => {
+                roots.insert(stdlib_program_path("portal"));
+            }
+            _ if path.starts_with("portal/") => {
+                roots.insert(stdlib_program_path("portal"));
+            }
+            _ if path.starts_with("templates/") => {}
+            _ => {
+                roots.insert(stdlib_program_path("shared"));
+            }
+        }
+    }
+
+    roots
+}
+
+fn affected_stdlib_roots(paths: &[String]) -> Vec<&'static str> {
+    let roots = stdlib_roots_for_paths(paths);
+    if roots.contains(stdlib_program_path("shared")) {
+        return ruby_stdlib_dependency_roots()
+            .into_iter()
+            .map(|(program, _)| program)
+            .collect();
+    }
+    roots.into_iter().collect()
+}
+
+fn area_program_path(area_id: &AreaId) -> String {
+    format!("area:{}/{}", area_id.namespace, area_id.name)
+}
+
+fn parse_area_program_path(program: &str) -> Option<AreaId> {
+    let area = program.strip_prefix("area:")?;
+    let (namespace, name) = area.split_once('/')?;
+    Some(AreaId::new(namespace, name))
+}
+
+fn area_dependency_paths(area_path: &str, language: &str) -> Vec<String> {
+    if language != "ruby" {
+        return Vec::new();
+    }
+
+    let area_path = Path::new(area_path);
+    let mut deps = std::collections::BTreeSet::new();
+    deps.insert(stdlib_program_path("shared").to_string());
+    deps.insert(stdlib_program_path("area").to_string());
+
+    if area_path.join("rooms").exists() {
+        deps.insert(stdlib_program_path("room").to_string());
+    }
+    if area_path.join("items").exists() {
+        deps.insert(stdlib_program_path("item").to_string());
+    }
+    if area_path.join("npcs").exists() {
+        deps.insert(stdlib_program_path("npc").to_string());
+    }
+    if area_path.join("daemons").exists() {
+        deps.insert(stdlib_program_path("daemon").to_string());
+    }
+    if area_path.join("commands").exists() {
+        deps.insert(stdlib_program_path("commands").to_string());
+    }
+    if area_path.join("mud_web.rb").exists() || area_path.join("web").exists() {
+        deps.insert(stdlib_program_path("area_web").to_string());
+    }
+
+    for file in collect_ruby_files(area_path) {
+        if let Ok(source) = std::fs::read_to_string(&file) {
+            if source.contains("< Room") || source.contains("Room.new") {
+                deps.insert(stdlib_program_path("room").to_string());
+            }
+            if source.contains("< Item") || source.contains("Item.new") {
+                deps.insert(stdlib_program_path("item").to_string());
+            }
+            if source.contains("< NPC") || source.contains("NPC.new") {
+                deps.insert(stdlib_program_path("npc").to_string());
+            }
+            if source.contains("< Daemon") || source.contains("Daemon.new") {
+                deps.insert(stdlib_program_path("daemon").to_string());
+            }
+            if source.contains("web_data do") || source.contains("render_template(") {
+                deps.insert(stdlib_program_path("area_web").to_string());
+            }
+            if source.contains("Command") || source.contains("Parser") {
+                deps.insert(stdlib_program_path("commands").to_string());
+            }
+        }
+    }
+
+    deps.into_iter().collect()
+}
+
+fn collect_ruby_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(collect_ruby_files(&path));
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rb") {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
 // ---------------------------------------------------------------------------
 // Area discovery — public for testability
 // ---------------------------------------------------------------------------
@@ -2696,6 +3570,130 @@ fn collect_template_files(dir: &std::path::Path) -> Result<HashMap<String, Strin
     let mut files = HashMap::new();
     collect_files_recursive(dir, dir, &mut files)?;
     Ok(files)
+}
+
+fn scan_disk_template_by_name(name: &str) -> Result<HashMap<String, String>> {
+    match name {
+        "default" => collect_template_files(Path::new("bootstrap/ruby/stdlib/templates/area")),
+        "lpc" => collect_template_files(Path::new("bootstrap/lpc/templates/area/lpc")),
+        "rust" => collect_template_files(Path::new("bootstrap/lpc/templates/area/rust")),
+        template if template.starts_with("kotlin:") => {
+            let overlay = template.trim_start_matches("kotlin:");
+            let base = collect_template_files(Path::new("bootstrap/jvm/templates/area/base"))?;
+            let overlay_files = collect_template_files(
+                Path::new("bootstrap/jvm/templates/area/overlays")
+                    .join(overlay)
+                    .as_path(),
+            )?;
+            let mut merged = base;
+            merged.extend(overlay_files);
+            Ok(merged)
+        }
+        other => Err(anyhow::anyhow!("unknown bootstrap template '{}'", other)),
+    }
+}
+
+fn template_repo_name(template_name: &str) -> String {
+    let normalized = template_name
+        .to_ascii_lowercase()
+        .replace(':', "_")
+        .replace('-', "_");
+    format!("template_{normalized}")
+}
+
+fn default_template_metadata(template_name: &str) -> TemplateMetadata {
+    match template_name {
+        "default" => TemplateMetadata {
+            name: "default".into(),
+            kind: "area_template".into(),
+            language: "ruby".into(),
+            framework: None,
+            display_name: Some("Ruby Default".into()),
+            description: Some("Default Ruby area template".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        "lpc" => TemplateMetadata {
+            name: "lpc".into(),
+            kind: "area_template".into(),
+            language: "lpc".into(),
+            framework: None,
+            display_name: Some("LPC".into()),
+            description: Some("LPC area template".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        "rust" => TemplateMetadata {
+            name: "rust".into(),
+            kind: "area_template".into(),
+            language: "rust".into(),
+            framework: None,
+            display_name: Some("Rust".into()),
+            description: Some("Rust area template".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        "kotlin:ktor" => TemplateMetadata {
+            name: "kotlin:ktor".into(),
+            kind: "area_template".into(),
+            language: "kotlin".into(),
+            framework: Some("ktor".into()),
+            display_name: Some("Kotlin Ktor".into()),
+            description: Some("Kotlin template using Ktor".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        "kotlin:quarkus" => TemplateMetadata {
+            name: "kotlin:quarkus".into(),
+            kind: "area_template".into(),
+            language: "kotlin".into(),
+            framework: Some("quarkus".into()),
+            display_name: Some("Kotlin Quarkus".into()),
+            description: Some("Kotlin template using Quarkus".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        "kotlin:spring-boot" => TemplateMetadata {
+            name: "kotlin:spring-boot".into(),
+            kind: "area_template".into(),
+            language: "kotlin".into(),
+            framework: Some("spring-boot".into()),
+            display_name: Some("Kotlin Spring Boot".into()),
+            description: Some("Kotlin template using Spring Boot".into()),
+            branch: Some("main".into()),
+            stdlib_compatible: Some(true),
+        },
+        other => TemplateMetadata {
+            name: other.into(),
+            kind: "area_template".into(),
+            language: "unknown".into(),
+            framework: None,
+            display_name: None,
+            description: None,
+            branch: Some("main".into()),
+            stdlib_compatible: None,
+        },
+    }
+}
+
+fn with_template_metadata_file(
+    template_name: &str,
+    mut files: HashMap<String, String>,
+) -> HashMap<String, String> {
+    if !files.contains_key("template.yml") {
+        let metadata = default_template_metadata(template_name);
+        if let Ok(yaml) = serde_yaml::to_string(&metadata) {
+            files.insert("template.yml".into(), yaml);
+        }
+    }
+    files
+}
+
+fn with_stdlib_metadata_file(mut files: HashMap<String, String>) -> HashMap<String, String> {
+    if !files.contains_key(".meta.yml") {
+        files.insert(".meta.yml".into(), "owner: system\nsystem: true\n".into());
+    }
+    files
 }
 
 fn collect_files_recursive(
@@ -2782,6 +3780,10 @@ pub fn discover_areas(world_path: &str) -> Result<Vec<(AreaId, String)>> {
 
         if namespace.is_empty() || name.is_empty() {
             warn!(path = %path.display(), "could not extract namespace/name, skipping");
+            continue;
+        }
+
+        if namespace == "system" && name.starts_with("template_") {
             continue;
         }
 
@@ -2946,5 +3948,79 @@ mod tests {
         });
 
         assert_eq!(enabled_adapter_count(&config), 3);
+    }
+
+    #[test]
+    fn template_repo_name_normalizes_template_names() {
+        assert_eq!(template_repo_name("default"), "template_default");
+        assert_eq!(template_repo_name("kotlin:ktor"), "template_kotlin_ktor");
+        assert_eq!(
+            template_repo_name("kotlin:spring-boot"),
+            "template_kotlin_spring_boot"
+        );
+    }
+
+    #[test]
+    fn metadata_file_is_injected_for_bootstrap_templates() {
+        let files = with_template_metadata_file("lpc", HashMap::new());
+        let metadata = files.get("template.yml").expect("template metadata");
+        assert!(metadata.contains("name: lpc"));
+        assert!(metadata.contains("kind: area_template"));
+        assert!(metadata.contains("language: lpc"));
+    }
+
+    #[test]
+    fn metadata_file_is_injected_for_bootstrap_stdlib() {
+        let files = with_stdlib_metadata_file(HashMap::new());
+        let metadata = files.get(".meta.yml").expect("stdlib metadata");
+        assert!(metadata.contains("owner: system"));
+        assert!(metadata.contains("system: true"));
+    }
+
+    #[test]
+    fn parse_area_program_path_round_trip() {
+        let area_id = AreaId::new("vikings", "village");
+        let program = area_program_path(&area_id);
+        let parsed = parse_area_program_path(&program).expect("parsed area id");
+        assert_eq!(parsed.namespace, "vikings");
+        assert_eq!(parsed.name, "village");
+    }
+
+    #[test]
+    fn affected_stdlib_roots_map_changed_files() {
+        let room = affected_stdlib_roots(&["world/room.rb".to_string()]);
+        assert_eq!(room, vec![stdlib_program_path("room")]);
+
+        let portal = affected_stdlib_roots(&["portal/app.rb".to_string()]);
+        assert_eq!(portal, vec![stdlib_program_path("portal")]);
+
+        let all = affected_stdlib_roots(&["system/access_control.rb".to_string()]);
+        assert!(all.contains(&stdlib_program_path("shared")));
+        assert!(all.contains(&stdlib_program_path("room")));
+        assert!(all.contains(&stdlib_program_path("portal")));
+    }
+
+    #[test]
+    fn ruby_area_dependencies_include_precise_runtime_roots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let area_path = dir.path().join("area");
+        std::fs::create_dir_all(area_path.join("rooms")).expect("create rooms dir");
+        std::fs::create_dir_all(area_path.join("items")).expect("create items dir");
+        std::fs::create_dir_all(area_path.join("web")).expect("create web dir");
+        std::fs::write(area_path.join("mud_web.rb"), "# web").expect("write mud_web.rb");
+
+        let deps = area_dependency_paths(&area_path.to_string_lossy(), "ruby");
+        assert!(deps.contains(&stdlib_program_path("shared").to_string()));
+        assert!(deps.contains(&stdlib_program_path("area").to_string()));
+        assert!(deps.contains(&stdlib_program_path("room").to_string()));
+        assert!(deps.contains(&stdlib_program_path("item").to_string()));
+        assert!(deps.contains(&stdlib_program_path("area_web").to_string()));
+        assert!(!deps.contains(&stdlib_program_path("portal").to_string()));
+    }
+
+    #[test]
+    fn non_ruby_area_dependencies_are_empty_for_now() {
+        assert!(area_dependency_paths("/tmp/example", "lpc").is_empty());
+        assert!(area_dependency_paths("/tmp/example", "rust").is_empty());
     }
 }

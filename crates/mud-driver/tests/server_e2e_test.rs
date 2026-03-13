@@ -778,3 +778,23 @@ fn discover_areas_with_system_namespace() {
     assert!(ids.contains(&"system/stdlib".to_string()));
     assert!(ids.contains(&"vikings/town".to_string()));
 }
+
+#[test]
+fn discover_areas_skips_system_template_repos() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let world_path = dir.path().join("world");
+
+    let template_repo = world_path.join("system").join("template_default");
+    std::fs::create_dir_all(&template_repo).unwrap();
+    std::fs::write(template_repo.join(".meta.yml"), "owner: system\n").unwrap();
+
+    let stdlib = world_path.join("system").join("stdlib");
+    std::fs::create_dir_all(&stdlib).unwrap();
+    std::fs::write(stdlib.join(".meta.yml"), "owner: system\nsystem: true\n").unwrap();
+
+    let areas = mud_driver::server::discover_areas(&world_path.to_string_lossy()).unwrap();
+
+    let ids: Vec<String> = areas.iter().map(|a| a.0.to_string()).collect();
+    assert!(ids.contains(&"system/stdlib".to_string()));
+    assert!(!ids.contains(&"system/template_default".to_string()));
+}

@@ -39,7 +39,7 @@ module WebDataHelpersTest
     )
 
     dsl = MudAdapter::Stdlib::World::WebDataDSL.evaluate(
-      File.expand_path("../lib/mud_adapter/stdlib/templates/area/mud_web.rb", __dir__)
+      File.expand_path("../../../bootstrap/ruby/stdlib/templates/area/mud_web.rb", __dir__)
     )
     data = dsl.data_block.call(area, helpers)
 

@@ -1,0 +1,9 @@
+system_repos:
+  role_levels:
+    admin: read_write
+
+builder_repos:
+  role_levels:
+    admin: read_write
+
+repos: {}

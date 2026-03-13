@@ -306,14 +306,14 @@ The launcher process connects to the driver, sends handshake and area templates,
 
 ### Area Templates
 
-Templates are stored in `stdlib/templates/area/` with a base + overlay structure:
+Templates are stored as bootstrap files on disk at `bootstrap/jvm/templates/area/` with a base + overlay structure:
 
 - `base/` — shared files (MudArea.kt, Entrance.kt, build.gradle.kts, settings.gradle.kts, mud.yaml, web/templates/)
 - `overlays/ktor/` — Ktor-specific build.gradle.kts with Ktor dependencies + mud.yaml with `framework: ktor`
 - `overlays/quarkus/` — Quarkus overlay
 - `overlays/spring-boot/` — Spring Boot overlay
 
-Templates are sent to the driver via `set_area_template` driver requests during handshake. The driver merges base + overlay files and registers them as named templates (e.g., `kotlin:ktor`).
+On first boot, the driver reads these bootstrap files, provisions `system/template_*` repos, and later uses those repos as the runtime source of truth. During migration, the launcher can still send `set_area_template`, but that is no longer the steady-state source of templates.
 
 ### Area Build & Load Flow
 
@@ -414,7 +414,7 @@ The LPC VM (`crates/lpc-vm/`) provides full DGD-compatible LPC language support:
 
 ### Area Templates
 
-Templates are stored as files on disk at `adapters/lpc/templates/area/{rust,lpc}/`. The driver's `scan_disk_templates()` picks them up (same mechanism as JVM templates). Each subdirectory becomes a named template.
+Templates are stored as bootstrap files on disk at `bootstrap/lpc/templates/area/{rust,lpc}/`. The driver's bootstrap/template scan picks them up (same mechanism as JVM templates). Each subdirectory becomes a named template.
 
 ### Driver State Store
 

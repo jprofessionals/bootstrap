@@ -80,8 +80,6 @@ async fn main() -> anyhow::Result<()> {
     };
     write_adapter_message(&mut writer, &handshake).await?;
     tracing::info!("handshake sent");
-    send_area_template(&mut writer, "lpc", embedded_lpc_template_files()).await?;
-
     let mut state = AdapterState {
         areas: HashMap::new(),
         sessions: HashMap::new(),
@@ -110,63 +108,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-async fn send_area_template<W>(
-    writer: &mut W,
-    template_name: &str,
-    files: HashMap<String, Value>,
-) -> anyhow::Result<()>
-where
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    if files.is_empty() {
-        tracing::warn!(
-            template = template_name,
-            "template directory was empty"
-        );
-        return Ok(());
-    }
-
-    write_adapter_message(
-        writer,
-        &AdapterMessage::DriverRequest {
-            request_id: 1,
-            action: "set_area_template".into(),
-            params: Value::Map(HashMap::from([
-                ("name".into(), Value::String(template_name.into())),
-                ("files".into(), Value::Map(files)),
-            ])),
-        },
-    )
-    .await?;
-    tracing::info!(template = template_name, "sent area template");
-    Ok(())
-}
-
-fn embedded_lpc_template_files() -> HashMap<String, Value> {
-    HashMap::from([
-        (
-            "agents.md".into(),
-            Value::String(include_str!("../templates/area/lpc/agents.md").into()),
-        ),
-        (
-            "mud.yaml".into(),
-            Value::String(include_str!("../templates/area/lpc/mud.yaml").into()),
-        ),
-        (
-            "rooms/entrance.c".into(),
-            Value::String(include_str!("../templates/area/lpc/rooms/entrance.c").into()),
-        ),
-        (
-            "rooms/hall.c".into(),
-            Value::String(include_str!("../templates/area/lpc/rooms/hall.c").into()),
-        ),
-        (
-            "daemons/area_daemon.c".into(),
-            Value::String(include_str!("../templates/area/lpc/daemons/area_daemon.c").into()),
-        ),
-    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +219,33 @@ async fn handle_message(state: &mut AdapterState, msg: DriverMessage) -> Vec<Ada
                 result,
                 cache: None,
             }]
+        }
+
+        DriverMessage::CheckRepoAccess {
+            request_id,
+            username,
+            namespace,
+            name,
+            level,
+        } => {
+            tracing::debug!(
+                "check_repo_access: user={} repo={}/{} level={}",
+                username,
+                namespace,
+                name,
+                level
+            );
+            let result = Value::Map(HashMap::from([("allowed".into(), Value::Bool(false))]));
+            vec![AdapterMessage::CallResult {
+                request_id,
+                result,
+                cache: None,
+            }]
+        }
+
+        DriverMessage::ReloadStdlib { subsystem } => {
+            tracing::info!("ignoring stdlib reload for subsystem {}", subsystem);
+            vec![]
         }
 
         DriverMessage::GetWebData {
@@ -830,15 +798,6 @@ fn lpc_value_to_string(value: &LpcValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn collect_template_files_includes_lpc_sources() {
-        let files = embedded_lpc_template_files();
-
-        assert!(files.contains_key("mud.yaml"));
-        assert!(files.contains_key("rooms/entrance.c"));
-        assert!(files.contains_key("daemons/area_daemon.c"));
-    }
 
     #[tokio::test]
     async fn check_builder_access_returns_call_result() {
